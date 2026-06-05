@@ -9,6 +9,12 @@ import { env } from './config/env'
 import authRoutes from './modules/auth/auth.routes'
 import usersRoutes from "./modules/users/users.routes";
 import groupsRoutes from "./modules/groups/groups.routes";
+import sessionsRoutes from './modules/sessions/sessions.routes'
+import messagesRoutes from './modules/messages/messages.routes'
+import notificationsRoutes from "./modules/notifications/notifications.routes";
+import toolkitRoutes from "./modules/toolkit/toolkit.routes";
+import quizzesRoutes from "./modules/quizzes/quizzes.routes";
+import discoverRoutes from "./modules/discover/discover.routes";
 
 const app = express()
 
@@ -39,12 +45,12 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes)
 app.use("/api/users", usersRoutes);
 app.use("/api/groups", groupsRoutes);
-// app.use('/api/sessions', sessionRoutes)
-// app.use('/api/toolkit', toolkitRoutes)
-// app.use('/api/quizzes', quizRoutes)
-// app.use('/api/messages', messageRoutes)
-// app.use('/api/notifications', notificationRoutes)
-// app.use('/api/discover', discoverRoutes)
+ app.use("/api/sessions", sessionsRoutes);
+app.use('/api/toolkit', toolkitRoutes)
+app.use("/api/quizzes", quizzesRoutes);
+app.use("/api/messages", messagesRoutes);
+app.use("/api/notifications", notificationsRoutes);
+app.use('/api/discover', discoverRoutes)
 
 
 // error handler

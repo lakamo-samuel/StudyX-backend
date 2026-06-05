@@ -30,7 +30,7 @@ export const quizQuestions = pgTable("quiz_questions", {
     .notNull(),
   question: text("question").notNull(),
   options: jsonb("options").notNull(),
-  correctAnswer: varchar("correct_answer", { length: 10 }).notNull(),
+  correctAnswer: text("correct_answer").notNull(),
   order: integer("order").default(0).notNull(),
 });
 
@@ -45,7 +45,7 @@ export const quizAnswers = pgTable("quiz_answers", {
   userId: uuid("user_id")
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
-  answer: varchar("answer", { length: 10 }).notNull(),
+  answer: text("answer").notNull(),
   isCorrect: boolean("is_correct").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

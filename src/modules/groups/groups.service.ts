@@ -8,7 +8,7 @@ import type {
   UpdateGroupInput,
   InviteMemberInput,
   ChangeMemberRoleInput,
-} from "../groups/groups.schema";
+} from "./groups.schema";
 
 // ── CREATE GROUP ──
 export const createGroup = async (userId: string, input: CreateGroupInput) => {

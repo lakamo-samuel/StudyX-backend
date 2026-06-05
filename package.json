@@ -18,7 +18,9 @@
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^25.9.1",
+    "@types/pdf-parse": "^1.1.5",
     "@types/pg": "^8.20.0",
+    "@types/socket.io": "^3.0.1",
     "drizzle-kit": "^0.31.10",
     "tsx": "^4.7.0",
     "typescript": "^5.4.5"
@@ -26,6 +28,7 @@
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "bcryptjs": "^3.0.3",
+    "bullmq": "^5.78.0",
     "cloudinary": "^2.10.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
@@ -36,8 +39,10 @@
     "install": "^0.13.0",
     "ioredis": "^5.11.0",
     "jsonwebtoken": "^9.0.3",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.21.0",
     "resend": "^6.12.4",
+    "socket.io": "^4.8.3",
     "zod": "^4.4.3"
   }
 }

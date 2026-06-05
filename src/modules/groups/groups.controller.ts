@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import * as groupsService from "../messages/groups.service";
+import * as groupsService from "./groups.service";
 import type {
   CreateGroupInput,
   UpdateGroupInput,
