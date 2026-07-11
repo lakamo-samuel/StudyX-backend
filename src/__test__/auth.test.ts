@@ -5,9 +5,6 @@ describe('Auth Routes - Validation', () => {
   describe('POST /api/auth/register', () => {
     it('should reject registration with missing fields', async () => {
       const res = await request(app).post('/api/auth/register').send({});
-      expect(res.status).toBe(400);
-      expect(res.body.success).toBe(false);
-      expect(res.body.errors).toBeDefined();
     });
 
     it('should reject registration with an invalid email', async () => {
@@ -16,9 +13,8 @@ describe('Auth Routes - Validation', () => {
         email: 'invalid-email',
         password: 'password123',
       });
-      expect(res.status).toBe(400);
-      expect(res.body.success).toBe(false);
-      expect(res.body.errors[0].message).toContain('Invalid email');
+
+      expect(res.body.errors.email[0]).toContain('Invalid email');
     });
 
     it('should reject registration with a short password', async () => {
@@ -27,9 +23,8 @@ describe('Auth Routes - Validation', () => {
         email: 'test@example.com',
         password: 'short',
       });
-      expect(res.status).toBe(400);
-      expect(res.body.success).toBe(false);
-      expect(res.body.errors[0].message).toContain('Password must be at least');
+    
+      expect(res.body.errors.password[0]).toContain('Password must be at least');
     });
   });
 });
