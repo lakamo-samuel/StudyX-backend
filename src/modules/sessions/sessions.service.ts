@@ -1,8 +1,11 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray, desc } from "drizzle-orm";
 import { db } from "../../config/db";
 import { sessions, sessionAgenda } from "../../db/schema/sessions";
 import { groupMembers } from "../../db/schema/groups";
+import { files } from "../../db/schema/toolkit";
 import { AppError } from "../../middleware/error.middleware";
+import { generateContent } from "../../lib/gemini";
+import { aiQueue } from "../../jobs/queue";
 import type {
   CreateSessionInput,
   UpdateSessionInput,
@@ -70,7 +73,7 @@ export const getSessionsByGroup = async (groupId: string, userId: string) => {
     .orderBy(sessions.createdAt);
 };
 
-// ── GET ALL USER SESSIONS (across all groups) ──
+// ── GET ALL USER SESSIONS (across all groups) ── fixed N+1
 export const getAllUserSessions = async (userId: string) => {
   const memberships = await db
     .select({ groupId: groupMembers.groupId })
@@ -78,21 +81,14 @@ export const getAllUserSessions = async (userId: string) => {
     .where(eq(groupMembers.userId, userId));
 
   const groupIds = memberships.map((m) => m.groupId);
-
   if (groupIds.length === 0) return [];
 
-  const allSessions = await Promise.all(
-    groupIds.map((groupId) =>
-      db.select().from(sessions).where(eq(sessions.groupId, groupId)),
-    ),
-  );
-
-  return allSessions
-    .flat()
-    .sort(
-      (a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-    );
+  // single query with inArray instead of N parallel queries
+  return db
+    .select()
+    .from(sessions)
+    .where(inArray(sessions.groupId, groupIds))
+    .orderBy(desc(sessions.createdAt));
 };
 
 // ── GET SINGLE SESSION ──
@@ -238,4 +234,71 @@ export const deleteAgendaItem = async (itemId: string, userId: string) => {
   await db.delete(sessionAgenda).where(eq(sessionAgenda.id, itemId));
 
   return { message: "Agenda item deleted" };
+};
+
+// ── GENERATE QUIZ (queues background job) ──
+export const generateQuiz = async (
+  sessionId: string,
+  userId: string,
+  fileIds: string[],
+  topic?: string,
+  questionCount: number = 5,
+) => {
+  const session = await assertSessionAccess(sessionId, userId);
+
+  await aiQueue.add("generate-quiz", {
+    sessionId,
+    groupId: session.groupId,
+    fileIds,
+    topic,
+    questionCount,
+  });
+
+  return { message: "Quiz generation started" };
+};
+
+// ── GENERATE AGENDA (queues background job) ──
+export const generateAgenda = async (
+  sessionId: string,
+  userId: string,
+  duration: number = 90,
+) => {
+  const session = await assertSessionAccess(sessionId, userId);
+
+  await aiQueue.add("generate-agenda", {
+    sessionId,
+    groupId: session.groupId,
+    duration,
+  });
+
+  return { message: "Agenda generation started" };
+};
+
+// ── AI CHAT ──
+export const aiChat = async (
+  sessionId: string,
+  userId: string,
+  message: string,
+  history: { role: string; content: string }[],
+) => {
+  await assertSessionAccess(sessionId, userId);
+
+  if (!message?.trim()) {
+    throw new AppError("message is required", 400);
+  }
+
+  const historyText = history
+    .slice(-6)
+    .map((m) => `${m.role === "user" ? "Student" : "AI"}: ${m.content}`)
+    .join("\n");
+
+  const prompt = `You are a helpful academic study assistant inside a platform called Vyrdly.
+Help students understand material, explain concepts, and support their learning.
+Be concise, clear, and encouraging.
+
+${historyText ? `Conversation so far:\n${historyText}\n` : ""}Student: ${message}
+AI:`;
+
+  const answer = await generateContent(prompt);
+  return { answer: answer.trim() };
 };

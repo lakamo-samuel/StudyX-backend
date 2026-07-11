@@ -54,9 +54,9 @@ export const register = async (input: RegisterInput) => {
   try {
     await sendEmail({
       to: user.email,
-      subject: 'Verify your Vyrd account',
+      subject: 'Verify your Vyrdly account',
       html: `
-        <h2>Welcome to Vyrd, ${user.name}!</h2>
+        <h2>Welcome to Vyrdly, ${user.name}!</h2>
         <p>Your verification code is:</p>
         <h1 style="letter-spacing: 8px;">${otp}</h1>
         <p>This code expires in 10 minutes.</p>
@@ -120,7 +120,7 @@ export const login = async (input: LoginInput) => {
   const isMatch = await bcrypt.compare(input.password, user.password);
 
   if (!isMatch) {
-    throw new AppError("Invalid email or password", 402);
+    throw new AppError("Invalid email or password", 401);
   }
 
   const token = signToken({ userId: user.id, email: user.email });
@@ -154,11 +154,12 @@ export const forgotPassword = async (input: ForgotPasswordInput) => {
 
   const resetToken = crypto.randomInt(100000, 999999).toString();
 
-  await redis.set(`reset:${user.email}`, resetToken, "EX", 60 * 15);
+  // Store as token→email so we can look it up directly without scanning all keys
+  await redis.set(`reset:token:${resetToken}`, user.email, "EX", 60 * 15);
 
   await sendEmail({
     to: user.email,
-    subject: "Reset your Vyrd password",
+    subject: "Reset your Vyrdly password",
     html: `
       <h2>Password Reset</h2>
       <p>Your reset code is:</p>
@@ -174,16 +175,8 @@ export const forgotPassword = async (input: ForgotPasswordInput) => {
 // RESET PASSWORD
 
 export const resetPassword = async (input: ResetPasswordInput) => {
-  const keys = await redis.keys("reset:*");
-  let userEmail: string | null = null;
-
-  for (const key of keys) {
-    const storedToken = await redis.get(key);
-    if (storedToken === input.token) {
-      userEmail = key.replace("reset:", "");
-      break;
-    }
-  }
+  // Direct O(1) lookup — no more redis.keys() full scan
+  const userEmail = await redis.get(`reset:token:${input.token}`);
 
   if (!userEmail) {
     throw new AppError("Invalid or expired reset token", 400);
@@ -196,7 +189,7 @@ export const resetPassword = async (input: ResetPasswordInput) => {
     .set({ password: hashedPassword, updatedAt: new Date() })
     .where(eq(users.email, userEmail));
 
-  await redis.del(`reset:${userEmail}`);
+  await redis.del(`reset:token:${input.token}`);
 
   return { message: "Password reset successfully. You can now log in." };
 };

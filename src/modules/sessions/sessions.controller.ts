@@ -168,3 +168,60 @@ export const deleteAgendaItemController = async (
     next(err);
   }
 };
+
+export const generateQuizController = async (
+  req: Request<{ sessionId: string }>,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const { fileIds = [], topic, questionCount = 5 } = req.body;
+    const result = await sessionsService.generateQuiz(
+      req.params.sessionId,
+      req.user!.userId,
+      fileIds,
+      topic,
+      questionCount,
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const generateAgendaController = async (
+  req: Request<{ sessionId: string }>,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const { duration = 90 } = req.body;
+    const result = await sessionsService.generateAgenda(
+      req.params.sessionId,
+      req.user!.userId,
+      duration,
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const aiChatController = async (
+  req: Request<{ sessionId: string }>,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const { message, history = [] } = req.body;
+    const result = await sessionsService.aiChat(
+      req.params.sessionId,
+      req.user!.userId,
+      message,
+      history,
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};

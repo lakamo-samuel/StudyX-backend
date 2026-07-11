@@ -6,6 +6,7 @@ import {
   getAllUserFilesController,
   updateFileController,
   deleteFileController,
+  regenerateSummaryController,
 } from "./toolkit.controller";
 import { validate } from "../../middleware/validate.middleware";
 import { authenticate } from "../../middleware/auth.middleware";
@@ -25,5 +26,6 @@ router.patch(
   updateFileController,
 );
 router.delete("/files/:fileId", deleteFileController);
+router.post("/files/:fileId/regenerate-summary", regenerateSummaryController);
 
 export default router;

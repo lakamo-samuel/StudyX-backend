@@ -266,8 +266,30 @@ export const getSessionDebrief = async (sessionId: string, userId: string) => {
 
   const results = await getQuizResults(quiz.id, userId);
 
+  let durationStr = "0 min";
+  if (session.startedAt && session.endedAt) {
+    const diffMs = session.endedAt.getTime() - session.startedAt.getTime();
+    const diffMins = Math.round(diffMs / 60000);
+    if (diffMins < 60) durationStr = `${diffMins} min`;
+    else {
+      const hrs = Math.floor(diffMins / 60);
+      const mins = diffMins % 60;
+      durationStr = `${hrs} hr ${mins > 0 ? mins + ' min' : ''}`.trim();
+    }
+  }
+
+  const { groupMembers } = await import("../../db/schema/groups");
+  const members = await db.select({ id: groupMembers.id }).from(groupMembers).where(eq(groupMembers.groupId, session.groupId));
+  const participantCount = members.length;
+
+  const enrichedSession = {
+    ...session,
+    duration: durationStr,
+    participantCount: participantCount.toString()
+  };
+
   return {
-    session,
+    session: enrichedSession,
     quiz,
     results,
   };

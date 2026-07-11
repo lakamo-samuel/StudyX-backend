@@ -10,7 +10,7 @@ import { initSocket } from "./socket";
 // start workers
 import "./jobs/worker";
 
-const PORT = env.PORT || 5000;
+const PORT = env.PORT || 3000;
 
 const start = async () => {
   try {
@@ -30,7 +30,7 @@ const start = async () => {
     app.set("io", io);
 
     httpServer.listen(PORT, () => {
-      console.log(`🚀 Vyrd server running on port ${PORT}`);
+      console.log(`🚀 Vyrdly server running on port ${PORT}`);
       console.log(`📡 Environment: ${env.NODE_ENV}`);
       console.log(`🔌 Socket.io ready`);
     });

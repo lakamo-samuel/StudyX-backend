@@ -1,11 +1,19 @@
 import { Queue } from "bullmq";
 import { env } from "../config/env";
 
-const connection = {
-  host: "localhost",
-  port: 6380,
-  db: 0,
-};
+// BullMQ bundles its own ioredis — use plain options, not an external IORedis instance
+function parseRedisUrl(url: string) {
+  const parsed = new URL(url);
+  return {
+    host: parsed.hostname,
+    port: parseInt(parsed.port || "6379"),
+    password: parsed.password || undefined,
+    db: parseInt(parsed.pathname.slice(1) || "0"),
+    maxRetriesPerRequest: null as null,
+  };
+}
+
+const connection = parseRedisUrl(env.REDIS_URL);
 
 export const aiQueue = new Queue("ai-jobs", {
   connection,

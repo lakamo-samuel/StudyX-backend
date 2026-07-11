@@ -1,9 +1,9 @@
 import { db } from "../../config/db";
 import { quizzes, quizQuestions } from "../../db/schema/quizzes";
 import { files } from "../../db/schema/toolkit";
-import { sessions } from "../../db/schema/sessions";
 import { eq } from "drizzle-orm";
 import { generateContent } from "../../lib/gemini";
+import { getIo } from "../../socket/socket-instance";
 
 export const handleAiQuiz = async (job: {
   data: {
@@ -11,6 +11,7 @@ export const handleAiQuiz = async (job: {
     groupId: string;
     fileIds: string[];
     topic?: string;
+    questionCount?: number;
   };
 }) => {
   const { sessionId, groupId, fileIds, topic, questionCount = 5 } = job.data;
@@ -94,9 +95,30 @@ export const handleAiQuiz = async (job: {
 
     console.log(`✅ Quiz generated for session: ${sessionId}`);
 
+    // ── Notify all clients in the session room that the quiz is ready ──
+    const io = getIo();
+    if (io) {
+      io.to(sessionId).emit("quiz:ready", {
+        quizId: quiz.id,
+        sessionId,
+        questionCount: questions.length,
+      });
+      console.log(`📡 quiz:ready emitted for session: ${sessionId}`);
+    }
+
     return { quizId: quiz.id, questionCount: questions.length };
   } catch (err) {
     console.error(`❌ Failed to generate quiz for session ${sessionId}:`, err);
+
+    // Notify clients of the failure too
+    const io = getIo();
+    if (io) {
+      io.to(sessionId).emit("quiz:error", {
+        sessionId,
+        message: "Quiz generation failed. Please try again.",
+      });
+    }
+
     throw err;
   }
 };

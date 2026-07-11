@@ -3,6 +3,7 @@ import { sessionAgenda, sessions } from "../../db/schema/sessions";
 import { files } from "../../db/schema/toolkit";
 import { eq } from "drizzle-orm";
 import { generateContent } from "../../lib/gemini";
+import { getIo } from "../../socket/socket-instance";
 
 export const handleAiAgenda = async (job: {
   data: {
@@ -87,6 +88,28 @@ export const handleAiAgenda = async (job: {
         }),
       ),
     );
+
+    const [updatedSession] = await db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+
+    const agenda = await db
+      .select()
+      .from(sessionAgenda)
+      .where(eq(sessionAgenda.sessionId, sessionId))
+      .orderBy(sessionAgenda.order);
+
+    const io = getIo();
+    if (io && updatedSession) {
+      io.to(sessionId).emit("session:agenda:updated", {
+        session: {
+          ...updatedSession,
+          agenda,
+        },
+      });
+    }
 
     console.log(`✅ Agenda generated for session: ${sessionId}`);
 

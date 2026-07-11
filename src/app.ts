@@ -38,7 +38,7 @@ app.use(express.urlencoded({ extended: true }))
 // Health check
 
 app.get('/health', (req, res) => {
-    res.json({status: "ok", message: 'Vryd API is running'})
+    res.json({status: "ok", message: 'Vyrdly API is running'})
 })
 
 // ── ROUTES ──

@@ -92,3 +92,19 @@ export const deleteFileController = async (
     next(err);
   }
 };
+
+export const regenerateSummaryController = async (
+  req: Request<{ fileId: string }>,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const result = await toolkitService.regenerateSummary(
+      req.params.fileId,
+      req.user!.userId,
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};

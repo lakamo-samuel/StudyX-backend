@@ -8,7 +8,7 @@ import { sessionQueue } from "../../jobs/queue";
 export const registerSessionHandlers = (io: Server, socket: Socket) => {
   const userId = socket.data.userId;
 
-  // ── START SESSION ──
+  // ── START SESSION — admin only ──
   socket.on("session:start", async (data: { sessionId: string }) => {
     try {
       const { sessionId } = data;
@@ -21,6 +21,24 @@ export const registerSessionHandlers = (io: Server, socket: Socket) => {
 
       if (!session) return;
       if (session.status !== "ready" && session.status !== "scheduled") return;
+
+      // Only the group admin can start a session via socket
+      const [member] = await db
+        .select()
+        .from(groupMembers)
+        .where(
+          and(
+            eq(groupMembers.groupId, session.groupId),
+            eq(groupMembers.userId, userId),
+          ),
+        )
+        .limit(1);
+
+      if (!member) return;
+      if (member.role !== "admin") {
+        socket.emit("session:error", { message: "Only the group admin can start a session." });
+        return;
+      }
 
       const [updated] = await db
         .update(sessions)
@@ -41,7 +59,7 @@ export const registerSessionHandlers = (io: Server, socket: Socket) => {
         { delay: 1000 * 60 * 60 * 4 },
       );
 
-      console.log(`▶️ Session ${sessionId} started by ${userId}`);
+      console.log(`▶️ Session ${sessionId} started by ${userId} (admin)`);
     } catch (err) {
       console.error("❌ Session start error:", err);
     }

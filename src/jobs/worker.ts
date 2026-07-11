@@ -1,14 +1,24 @@
+import "dotenv/config";
 import { Worker } from "bullmq";
+import { env } from "../config/env";
 import { handleAiSummarize } from "./handlers/ai.summarize";
 import { handleAiQuiz } from "./handlers/ai.quiz";
 import { handleAiAgenda } from "./handlers/ai.agenda";
 import { handleSessionAutoEnd } from "./handlers/session.autoend";
 
-const connection = {
-  host: "localhost",
-  port: 6380,
-  db: 0,
-};
+// BullMQ bundles its own ioredis — parse URL into plain connection options
+function parseRedisUrl(url: string) {
+  const parsed = new URL(url);
+  return {
+    host: parsed.hostname,
+    port: parseInt(parsed.port || "6379"),
+    password: parsed.password || undefined,
+    db: parseInt(parsed.pathname.slice(1) || "0"),
+    maxRetriesPerRequest: null as null,
+  };
+}
+
+const connection = parseRedisUrl(env.REDIS_URL);
 
 const aiWorker = new Worker(
   "ai-jobs",

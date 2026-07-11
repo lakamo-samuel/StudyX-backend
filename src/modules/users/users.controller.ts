@@ -69,3 +69,16 @@ export const deleteAccountController = async (
     next(err);
   }
 };
+
+export const getAnalyticsController = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const result = await usersService.getAnalytics(req.user!.userId);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};

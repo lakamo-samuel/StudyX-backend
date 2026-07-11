@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { db } from "../../config/db";
 import { files } from "../../db/schema/toolkit";
 import { groupMembers } from "../../db/schema/groups";
@@ -29,7 +29,7 @@ export const getUploadSignature = async (groupId: string, userId: string) => {
     await assertGroupMember(groupId, userId)
 
     const timestamp = Math.round(new Date().getTime() / 1000)
-    const folder = `vyrd/group/${groupId}`
+    const folder = `Vyrdly/group/${groupId}`
 
     const signature = cloudinary.utils.api_sign_request(
         { timestamp, folder },
@@ -61,11 +61,12 @@ export const saveFile = async (userId: string, input: SaveFileInput) => {
     })
     .returning();
 
-  // trigger AI summary job in background
+  // trigger AI summary job in background — pass type so the handler can read actual content
   await aiQueue.add("summarize-file", {
     fileId: file.id,
     fileUrl: file.url,
     fileName: file.name,
+    fileType: file.type,
   });
 
   return file;
@@ -92,18 +93,12 @@ export const getAllUserFiles = async (userId: string) => {
   const groupIds = memberships.map((m) => m.groupId);
   if (groupIds.length === 0) return [];
 
-  const allFiless = await Promise.all(
-    groupIds.map((groupId) =>
-      db.select().from(files).where(eq(files.groupId, groupId)),
-    ),
-  );
-
-  return allFiless
-    .flat()
-    .sort(
-      (a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-    );
+  // single query with inArray instead of N parallel queries
+  return db
+    .select()
+    .from(files)
+    .where(inArray(files.groupId, groupIds))
+    .orderBy(files.createdAt);
 };
 
 // --UPDATE FILE --
@@ -122,10 +117,11 @@ export const updateFile = async (
 
   await assertGroupMember(file.groupId, userId);
 
+  // BUG FIX: was eq(files.id, userId) — must be fileId
   const [updated] = await db
     .update(files)
     .set(input)
-    .where(eq(files.id, userId))
+    .where(eq(files.id, fileId))
     .returning();
 
   return updated;
@@ -139,11 +135,11 @@ export const deleteFile = async (fileId: string, userId: string) => {
     
     await assertGroupMember(file.groupId, userId)
 
-    // delete from cloudinary
-    const publicId = file.url.split('/').slice(-1)[0].split('.')[0]
+    // delete from cloudinary — folder must match upload path: Vyrdly/group/<groupId>
+    const publicId = file.url.split('/').slice(-2).join('/').split('.')[0]
       try {
         await cloudinary.uploader.destroy(
-          `vyrd/groups/${file.groupId}/${publicId}`,
+          `Vyrdly/group/${file.groupId}/${publicId}`,
         );
       } catch (err) {
         console.warn("⚠️ Cloudinary delete failed — removing from DB anyway");
@@ -160,3 +156,31 @@ export const saveAiSummary = async (fileId: string, summary: string) => {
 
     return updated
 }
+
+// -- REGENERATE AI SUMMARY --
+export const regenerateSummary = async (fileId: string, userId: string) => {
+  const [file] = await db
+    .select()
+    .from(files)
+    .where(eq(files.id, fileId))
+    .limit(1);
+
+  if (!file) throw new AppError("File not found", 404);
+  await assertGroupMember(file.groupId, userId);
+
+  // Set file back to processing state
+  await db
+    .update(files)
+    .set({ hasAiSummary: false })
+    .where(eq(files.id, fileId));
+
+  // Re-queue the AI job
+  await aiQueue.add("summarize-file", {
+    fileId: file.id,
+    fileUrl: file.url,
+    fileName: file.name,
+    fileType: file.type,
+  });
+
+  return { message: "Summary regeneration queued" };
+};
