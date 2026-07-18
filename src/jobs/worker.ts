@@ -4,6 +4,7 @@ import { env } from "../config/env";
 import { handleAiSummarize } from "./handlers/ai.summarize";
 import { handleAiQuiz } from "./handlers/ai.quiz";
 import { handleAiAgenda } from "./handlers/ai.agenda";
+import { handleAiSessionSummary } from "./handlers/ai.session-summary";
 import { handleSessionAutoEnd } from "./handlers/session.autoend";
 
 // BullMQ bundles its own ioredis — parse URL into plain connection options
@@ -30,6 +31,8 @@ const aiWorker = new Worker(
         return handleAiQuiz(job as any);
       case "generate-agenda":
         return handleAiAgenda(job as any);
+      case "summarize-session":
+        return handleAiSessionSummary(job as any);
       default:
         console.warn(`Unknown AI job: ${job.name}`);
     }

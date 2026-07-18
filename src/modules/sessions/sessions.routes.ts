@@ -16,6 +16,7 @@ import {
 } from "./sessions.controller";
 import { validate } from "../../middleware/validate.middleware";
 import { authenticate } from "../../middleware/auth.middleware";
+import { aiRateLimit } from "../../middleware/rateLimit.middleware";
 import {
   createSessionSchema,
   updateSessionSchema,
@@ -26,7 +27,7 @@ import {
 
 const router = Router();
 
-// authenticate applies to every route in this router — no need to repeat it
+// authenticate applies to every route in this router
 router.use(authenticate);
 
 // ── Sessions CRUD ──
@@ -43,9 +44,10 @@ router.post("/:sessionId/agenda", validate(createAgendaItemSchema), addAgendaIte
 router.patch("/agenda/:itemId", validate(updateAgendaItemSchema), updateAgendaItemController);
 router.delete("/agenda/:itemId", deleteAgendaItemController);
 
-// ── AI features — now use proper controllers, no inline handlers ──
-router.post("/:sessionId/generate-quiz", generateQuizController);
-router.post("/:sessionId/generate-agenda", generateAgendaController);
-router.post("/:sessionId/ai-chat", aiChatController);
+// ── AI features — rate-limited to 5 req/min per user ──
+router.post("/:sessionId/generate-quiz", aiRateLimit, generateQuizController);
+router.post("/:sessionId/generate-agenda", aiRateLimit, generateAgendaController);
+router.post("/:sessionId/ai-chat", aiRateLimit, aiChatController);
+
 
 export default router;

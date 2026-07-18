@@ -1,18 +1,35 @@
+import { z } from "zod";
 import { db } from "../../config/db";
 import { sessionAgenda, sessions } from "../../db/schema/sessions";
-import { files } from "../../db/schema/toolkit";
 import { eq } from "drizzle-orm";
-import { generateContent } from "../../lib/gemini";
+import { generateJson } from "../../lib/gemini";
+import { buildGroupContext, buildToolkitContext } from "../../lib/ai-context";
 import { getIo } from "../../socket/socket-instance";
 
+// ────────────────────────────────────────────────────────
+//  ZOD SCHEMA — validates every agenda item Gemini returns
+// ────────────────────────────────────────────────────────
+const AgendaItemSchema = z.object({
+  topic: z.string().min(2).max(200),
+  timeBlock: z.string().min(1).max(50),
+  durationMinutes: z.number().int().min(1).max(180),
+  order: z.number().int().min(0),
+});
+
+const AgendaArraySchema = z.array(AgendaItemSchema).min(2).max(12);
+
+// ────────────────────────────────────────────────────────
+//  AGENDA GENERATION JOB
+// ────────────────────────────────────────────────────────
 export const handleAiAgenda = async (job: {
   data: {
     sessionId: string;
     groupId: string;
     duration?: number;
+    fileIds?: string[];
   };
 }) => {
-  const { sessionId, groupId, duration = 90 } = job.data;
+  const { sessionId, groupId, duration = 90, fileIds } = job.data;
 
   console.log(`🤖 Generating agenda for session: ${sessionId}`);
 
@@ -23,72 +40,115 @@ export const handleAiAgenda = async (job: {
       .where(eq(sessions.id, sessionId))
       .limit(1);
 
-    const groupFiles = await db
-      .select({ name: files.name, summary: files.summary })
-      .from(files)
-      .where(eq(files.groupId, groupId));
-
-    const fileContext = groupFiles
-      .filter((f) => f.summary)
-      .map((f) => `- ${f.name}: ${f.summary}`)
-      .join("\n");
+    const [groupCtx, toolkitContext] = await Promise.all([
+      buildGroupContext(groupId),
+      buildToolkitContext(
+        groupId,
+        fileIds && fileIds.length > 0 ? fileIds : undefined,
+      ),
+    ]);
 
     const prompt = `
-      You are an academic session planner for university students.
-      Session title: "${session?.title || "Study Session"}"
-      Session goal: "${session?.goal || "Study effectively"}"
-      Duration: ${duration} minutes
-      ${fileContext ? `Available study materials:\n${fileContext}` : ""}
-      
-      Create a structured study session agenda.
-      
-      Return ONLY a valid JSON array, no markdown, no explanation:
-      [
-        {
-          "topic": "Topic name here",
-          "timeBlock": "0:00 – 0:20",
-          "order": 0
-        }
-      ]
-      
-      Rules:
-      - Create 4-6 agenda items that fit within ${duration} minutes
-      - Time blocks should be realistic and add up to the total duration
-      - Start with a review/warmup, end with questions/wrap-up
-      - order starts at 0
-    `;
+You are a professional academic session planner for university students.
 
-    const raw = await generateContent(prompt);
+${groupCtx.contextString}
+Session title: "${session?.title ?? "Study Session"}"
+Session goal: "${session?.goal ?? "Study effectively"}"
+Session duration: ${duration} minutes
 
-    const cleaned = raw
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim();
+${toolkitContext ? `Study materials for this session:\n${toolkitContext}` : "No study materials uploaded — plan based on the session title and goal."}
 
-    const agendaItems = JSON.parse(cleaned) as Array<{
-      topic: string;
-      timeBlock: string;
-      order: number;
-    }>;
+Create a well-structured session agenda. The time blocks MUST add up to exactly ${duration} minutes.
 
-    // delete existing agenda items first
+Structure:
+- Start with a warm-up/review block (5–10 min)
+- Include substantive topic blocks covering the session goal and materials
+- If duration > 60 min, add a short break (5–10 min)
+- End with a Q&A/wrap-up block (10–15 min)
+- Total items: 4–7 (inclusive)
+
+Return ONLY a JSON array — no markdown fences, no explanation:
+[
+  {
+    "topic": "Warm-up: Review last session",
+    "timeBlock": "0:00 – 0:10",
+    "durationMinutes": 10,
+    "order": 0
+  }
+]
+
+CRITICAL: The sum of all durationMinutes values MUST equal exactly ${duration}.
+    `.trim();
+
+    const raw = await generateJson(prompt);
+
+    // ── Validate with Zod ──
+    let agendaItems: z.infer<typeof AgendaArraySchema>;
+    try {
+      const parsed = JSON.parse(raw);
+      agendaItems = AgendaArraySchema.parse(
+        Array.isArray(parsed) ? parsed : [parsed],
+      );
+    } catch (parseErr: any) {
+      throw new Error(
+        `Gemini returned invalid agenda JSON: ${parseErr.message}. Raw: ${raw.slice(0, 200)}`,
+      );
+    }
+
+    // ── Validate and fix time sum ──
+    const totalMinutes = agendaItems.reduce(
+      (sum, item) => sum + item.durationMinutes,
+      0,
+    );
+
+    let finalItems = agendaItems;
+
+    if (Math.abs(totalMinutes - duration) > 5) {
+      // Scale durations proportionally to match requested duration
+      console.warn(
+        `⚠️  Agenda time sum (${totalMinutes} min) deviates from target (${duration} min). Scaling...`,
+      );
+      const scale = duration / totalMinutes;
+      let accumulated = 0;
+      finalItems = agendaItems.map((item, i) => {
+        const scaledDuration =
+          i === agendaItems.length - 1
+            ? duration - accumulated
+            : Math.max(1, Math.round(item.durationMinutes * scale));
+        accumulated += scaledDuration;
+        const start = accumulated - scaledDuration;
+        const startH = Math.floor(start / 60);
+        const startM = start % 60;
+        const endH = Math.floor(accumulated / 60);
+        const endM = accumulated % 60;
+        const fmt = (h: number, m: number) =>
+          `${h}:${String(m).padStart(2, "0")}`;
+        return {
+          ...item,
+          durationMinutes: scaledDuration,
+          timeBlock: `${fmt(startH, startM)} – ${fmt(endH, endM)}`,
+          order: i,
+        };
+      });
+    }
+
+    // ── Delete existing agenda and insert new one ──
     await db
       .delete(sessionAgenda)
       .where(eq(sessionAgenda.sessionId, sessionId));
 
-    // insert new AI generated agenda
-    await Promise.all(
-      agendaItems.map((item) =>
-        db.insert(sessionAgenda).values({
-          sessionId,
-          topic: item.topic,
-          timeBlock: item.timeBlock,
-          order: item.order,
-          done: false,
-        }),
-      ),
+    // Single batch insert
+    await db.insert(sessionAgenda).values(
+      finalItems.map((item) => ({
+        sessionId,
+        topic: item.topic,
+        timeBlock: item.timeBlock,
+        order: item.order,
+        done: false,
+      })),
     );
 
+    // Fetch updated session and agenda to broadcast
     const [updatedSession] = await db
       .select()
       .from(sessions)
@@ -104,16 +164,13 @@ export const handleAiAgenda = async (job: {
     const io = getIo();
     if (io && updatedSession) {
       io.to(sessionId).emit("session:agenda:updated", {
-        session: {
-          ...updatedSession,
-          agenda,
-        },
+        session: { ...updatedSession, agenda },
       });
     }
 
-    console.log(`✅ Agenda generated for session: ${sessionId}`);
+    console.log(`✅ Agenda generated for session: ${sessionId} (${finalItems.length} items, ${duration} min)`);
 
-    return { sessionId, itemCount: agendaItems.length };
+    return { sessionId, itemCount: finalItems.length };
   } catch (err) {
     console.error(
       `❌ Failed to generate agenda for session ${sessionId}:`,

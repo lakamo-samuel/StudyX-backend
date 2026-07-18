@@ -195,11 +195,12 @@ export const generateAgendaController = async (
   next: NextFunction,
 ): Promise<void> => {
   try {
-    const { duration = 90 } = req.body;
+    const { duration = 90, fileIds = [] } = req.body;
     const result = await sessionsService.generateAgenda(
       req.params.sessionId,
       req.user!.userId,
       duration,
+      fileIds,
     );
     res.status(200).json(result);
   } catch (err) {
@@ -213,15 +214,15 @@ export const aiChatController = async (
   next: NextFunction,
 ): Promise<void> => {
   try {
-    const { message, history = [] } = req.body;
+    const { message } = req.body;
     const result = await sessionsService.aiChat(
       req.params.sessionId,
       req.user!.userId,
       message,
-      history,
     );
     res.status(200).json(result);
   } catch (err) {
     next(err);
   }
 };
+

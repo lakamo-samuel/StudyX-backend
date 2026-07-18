@@ -30,6 +30,8 @@ export const sessions = pgTable("sessions", {
   scheduledTime: varchar("scheduled_time", { length: 20 }),
   startedAt: timestamp("started_at"),
   endedAt: timestamp("ended_at"),
+  /** AI-generated session debrief — populated by summarize-session job after session ends */
+  aiSummary: text("ai_summary"),
   createdBy: uuid("created_by").references(() => users.id, {
     onDelete: "set null",
   }),

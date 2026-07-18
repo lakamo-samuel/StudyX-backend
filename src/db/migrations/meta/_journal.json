@@ -15,6 +15,13 @@
       "when": 1780088431692,
       "tag": "0001_orange_wendigo",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783818443505,
+      "tag": "0002_real_king_bedlam",
+      "breakpoints": true
     }
   ]
 }

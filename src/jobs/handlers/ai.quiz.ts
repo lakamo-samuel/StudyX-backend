@@ -1,10 +1,31 @@
+import { z } from "zod";
 import { db } from "../../config/db";
 import { quizzes, quizQuestions } from "../../db/schema/quizzes";
-import { files } from "../../db/schema/toolkit";
+import { sessions } from "../../db/schema/sessions";
 import { eq } from "drizzle-orm";
-import { generateContent } from "../../lib/gemini";
+import { generateJson } from "../../lib/gemini";
+import { buildGroupContext, buildToolkitContext } from "../../lib/ai-context";
 import { getIo } from "../../socket/socket-instance";
 
+// ────────────────────────────────────────────────────────
+//  ZOD SCHEMA — validates every question Gemini returns
+// ────────────────────────────────────────────────────────
+const QuizQuestionSchema = z
+  .object({
+    question: z.string().min(5).max(600),
+    options: z.array(z.string().min(1).max(300)).length(4),
+    correctAnswer: z.string().min(1).max(300),
+    order: z.number().int().min(0),
+  })
+  .refine((q) => q.options.includes(q.correctAnswer), {
+    message: "correctAnswer must exactly match one of the options",
+  });
+
+const QuizArraySchema = z.array(QuizQuestionSchema).min(1).max(20);
+
+// ────────────────────────────────────────────────────────
+//  QUIZ GENERATION JOB
+// ────────────────────────────────────────────────────────
 export const handleAiQuiz = async (job: {
   data: {
     sessionId: string;
@@ -19,98 +40,111 @@ export const handleAiQuiz = async (job: {
   console.log(`🤖 Generating quiz for session: ${sessionId}`);
 
   try {
-    // get file summaries for context
-    const groupFiles = await db
+    // Fetch session details
+    const [session] = await db
       .select()
-      .from(files)
-      .where(eq(files.groupId, groupId));
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
 
-    const relevantFiles =
-      fileIds.length > 0
-        ? groupFiles.filter((f) => fileIds.includes(f.id))
-        : groupFiles;
+    // Build context
+    const [groupCtx, toolkitContext] = await Promise.all([
+      buildGroupContext(groupId),
+      buildToolkitContext(groupId, fileIds.length > 0 ? fileIds : undefined),
+    ]);
 
-    const fileContext = relevantFiles
-      .filter((f) => f.summary)
-      .map((f) => `File: ${f.name}\nSummary: ${f.summary}`)
-      .join("\n\n");
+    const sessionInfo = session
+      ? `Session title: "${session.title}"\nSession goal: "${session.goal ?? "Study effectively"}"`
+      : "";
+
+    const topicLine = topic ? `Focus topic: "${topic}"` : "";
 
     const prompt = `
-      You are an academic quiz generator for university students.
-      ${topic ? `Topic: ${topic}` : ""}
-      ${fileContext ? `Study materials context:\n${fileContext}` : ""}
-      
-      Generate exactly ${questionCount} multiple choice quiz questions.
-      
-      Return ONLY a valid JSON array — no markdown, no explanation, no extra text:
-      [
-        {
-          "question": "Question text here?",
-          "options": ["Option A", "Option B", "Option C", "Option D"],
-          "correctAnswer": "Option A",
-          "order": 0
-        }
-      ]
-      
-      Rules:
-      - Each question must have exactly 4 options
-      - correctAnswer must exactly match one of the options
-      - Questions should test understanding, not memorization
-      - order goes from 0 to ${questionCount - 1}
-      - You MUST return exactly ${questionCount} questions, no more, no less
-    `;
+You are generating a multiple-choice quiz for a university group study session.
 
-    const raw = await generateContent(prompt);
+${groupCtx.contextString}
+${sessionInfo}
+${topicLine}
 
-    // parse the JSON response
-    const cleaned = raw
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim();
+${toolkitContext ? `Study materials used in this session:\n${toolkitContext}` : "No study materials uploaded — generate questions based on the session topic and goal."}
 
-    const questions = JSON.parse(cleaned) as Array<{
-      question: string;
-      options: string[];
-      correctAnswer: string;
-      order: number;
-    }>;
+Generate exactly ${questionCount} multiple-choice questions STRICTLY based on the context above.
+Do NOT invent facts not supported by the materials or session goal.
+Every question must be directly answerable from the information provided.
 
-    // save quiz to database
+Requirements per question:
+- Exactly 4 options written as complete phrases (not just "A", "B", etc.)
+- correctAnswer must be the full text of one option (copy it exactly)
+- Mix of difficulty: 40% recall, 40% comprehension, 20% application
+- No trick questions or ambiguous phrasing
+- order is the question index starting from 0
+
+Return ONLY a JSON array — no explanation, no markdown fences, no extra text:
+[
+  {
+    "question": "Question text here?",
+    "options": ["Option A text", "Option B text", "Option C text", "Option D text"],
+    "correctAnswer": "Option A text",
+    "order": 0
+  }
+]
+
+You MUST return exactly ${questionCount} questions.
+    `.trim();
+
+    const raw = await generateJson(prompt);
+
+    // ── Validate with Zod (no silent crashes) ──
+    let questions: z.infer<typeof QuizArraySchema>;
+    try {
+      const parsed = JSON.parse(raw);
+      questions = QuizArraySchema.parse(Array.isArray(parsed) ? parsed : [parsed]);
+    } catch (parseErr: any) {
+      throw new Error(
+        `Gemini returned invalid quiz JSON: ${parseErr.message}. Raw: ${raw.slice(0, 200)}`,
+      );
+    }
+
+    // ── Enforce question count (clamp to requested) ──
+    const finalQuestions = questions.slice(0, questionCount).map((q, i) => ({
+      ...q,
+      order: i,
+    }));
+
+    // ── Save quiz — single batch insert instead of N parallel queries ──
     const [quiz] = await db
       .insert(quizzes)
       .values({ sessionId, groupId })
       .returning();
 
-    await Promise.all(
-      questions.map((q) =>
-        db.insert(quizQuestions).values({
-          quizId: quiz.id,
-          question: q.question,
-          options: q.options,
-          correctAnswer: q.correctAnswer,
-          order: q.order,
-        }),
-      ),
+    await db.insert(quizQuestions).values(
+      finalQuestions.map((q) => ({
+        quizId: quiz.id,
+        question: q.question,
+        options: q.options,
+        correctAnswer: q.correctAnswer,
+        order: q.order,
+      })),
     );
 
-    console.log(`✅ Quiz generated for session: ${sessionId}`);
+    console.log(`✅ Quiz generated for session: ${sessionId} (${finalQuestions.length} questions)`);
 
-    // ── Notify all clients in the session room that the quiz is ready ──
+    // Notify all clients in the session room
     const io = getIo();
     if (io) {
       io.to(sessionId).emit("quiz:ready", {
         quizId: quiz.id,
         sessionId,
-        questionCount: questions.length,
+        questionCount: finalQuestions.length,
       });
       console.log(`📡 quiz:ready emitted for session: ${sessionId}`);
     }
 
-    return { quizId: quiz.id, questionCount: questions.length };
+    return { quizId: quiz.id, questionCount: finalQuestions.length };
   } catch (err) {
     console.error(`❌ Failed to generate quiz for session ${sessionId}:`, err);
 
-    // Notify clients of the failure too
+    // Notify clients of failure
     const io = getIo();
     if (io) {
       io.to(sessionId).emit("quiz:error", {

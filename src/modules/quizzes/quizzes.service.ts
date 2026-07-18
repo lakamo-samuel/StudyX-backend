@@ -44,24 +44,23 @@ export const createQuiz = async (userId: string, input: CreateQuizInput) => {
     })
     .returning();
 
-  const insertedQuestions = await Promise.all(
-    input.questions.map((q, index) =>
-      db
-        .insert(quizQuestions)
-        .values({
-          quizId: quiz.id,
-          question: q.question,
-          options: q.options,
-          correctAnswer: q.correctAnswer,
-          order: q.order ?? index,
-        })
-        .returning(),
-    ),
-  );
+  // Single batch insert instead of N parallel queries
+  const insertedQuestions = await db
+    .insert(quizQuestions)
+    .values(
+      input.questions.map((q, index) => ({
+        quizId: quiz.id,
+        question: q.question,
+        options: q.options,
+        correctAnswer: q.correctAnswer,
+        order: q.order ?? index,
+      })),
+    )
+    .returning();
 
   return {
     ...quiz,
-    questions: insertedQuestions.map((q) => q[0]),
+    questions: insertedQuestions,
   };
 };
 
@@ -123,7 +122,8 @@ export const submitAnswer = async (
 
   if (!question) throw new AppError("Question not found", 404);
 
-  const isCorrect = question.correctAnswer.trim() === input.answer.trim();
+  const isCorrect =
+    question.correctAnswer.trim().toLowerCase() === input.answer.trim().toLowerCase();
 
   // upsert — update if already answered, insert if not
   const existing = await db

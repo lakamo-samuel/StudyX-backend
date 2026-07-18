@@ -15,7 +15,11 @@ import notificationsRoutes from "./modules/notifications/notifications.routes";
 import toolkitRoutes from "./modules/toolkit/toolkit.routes";
 import quizzesRoutes from "./modules/quizzes/quizzes.routes";
 import discoverRoutes from "./modules/discover/discover.routes";
-
+import {
+    logger
+    
+} from './lib/logger';
+ import pinoHttp from 'pino-http'
 const app = express()
 
 
@@ -26,7 +30,10 @@ app.use(cors({
     origin: env.CLIENT_URL,
     credentials: true
 }))
-
+app.use(pinoHttp({
+    logger,
+    autoLogging: process.env.NODE_ENV === 'production' 
+}))
 //rate limiter
 app.use(generalRateLimit)
 

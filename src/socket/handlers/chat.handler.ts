@@ -1,7 +1,6 @@
 import { Socket, Server } from "socket.io";
 import { db } from "../../config/db";
 import { messages } from "../../db/schema/messages";
-import { users } from "../../db/schema/users";
 import { sessions } from "../../db/schema/sessions";
 import { groupMembers } from "../../db/schema/groups";
 import { eq, and } from "drizzle-orm";
@@ -16,7 +15,13 @@ export const registerChatHandlers = (io: Server, socket: Socket) => {
 
       if (!text?.trim()) return;
 
-      // verify user is in this session's group
+      // Hard limit on message length — prevents token/DB abuse
+      if (text.length > 5000) {
+        socket.emit("chat:error", { message: "Message too long (max 5000 characters)" });
+        return;
+      }
+
+      // Verify user is in this session's group
       const [session] = await db
         .select()
         .from(sessions)
@@ -38,26 +43,22 @@ export const registerChatHandlers = (io: Server, socket: Socket) => {
 
       if (!member) return;
 
-      // save to database
+      // Save to database (non-AI chat message)
       const [message] = await db
         .insert(messages)
-        .values({ sessionId, userId, text: text.trim() })
+        .values({ sessionId, userId, text: text.trim(), isAiChat: false, isAiResponse: false })
         .returning();
 
-      // get user details
-      const [user] = await db
-        .select({
-          id: users.id,
-          name: users.name,
-          avatar: users.avatar,
-        })
-        .from(users)
-        .where(eq(users.id, userId))
-        .limit(1);
+      // Use cached user profile from socket.data — no extra DB query needed
+      const user = {
+        id: userId,
+        name: socket.data.userName ?? "Unknown",
+        avatar: socket.data.userAvatar ?? null,
+      };
 
       const fullMessage = { ...message, user };
 
-      // broadcast to everyone in the session room including sender
+      // Broadcast to everyone in the session room including sender
       io.to(sessionId).emit("chat:message", fullMessage);
     } catch (err) {
       console.error("❌ Chat send error:", err);

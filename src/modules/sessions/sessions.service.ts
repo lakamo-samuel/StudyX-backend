@@ -2,9 +2,10 @@ import { eq, and, inArray, desc } from "drizzle-orm";
 import { db } from "../../config/db";
 import { sessions, sessionAgenda } from "../../db/schema/sessions";
 import { groupMembers } from "../../db/schema/groups";
-import { files } from "../../db/schema/toolkit";
+import { messages } from "../../db/schema/messages";
 import { AppError } from "../../middleware/error.middleware";
-import { generateContent } from "../../lib/gemini";
+import { generateChatContent } from "../../lib/gemini";
+import { buildGroupContext, buildToolkitContext } from "../../lib/ai-context";
 import { aiQueue } from "../../jobs/queue";
 import type {
   CreateSessionInput,
@@ -246,13 +247,10 @@ export const generateQuiz = async (
 ) => {
   const session = await assertSessionAccess(sessionId, userId);
 
-  await aiQueue.add("generate-quiz", {
-    sessionId,
-    groupId: session.groupId,
-    fileIds,
-    topic,
-    questionCount,
-  });
+  await aiQueue.add(
+    "generate-quiz",
+    { sessionId, groupId: session.groupId, fileIds, topic, questionCount }
+  );
 
   return { message: "Quiz generation started" };
 };
@@ -262,14 +260,14 @@ export const generateAgenda = async (
   sessionId: string,
   userId: string,
   duration: number = 90,
+  fileIds: string[] = [],
 ) => {
   const session = await assertSessionAccess(sessionId, userId);
 
-  await aiQueue.add("generate-agenda", {
-    sessionId,
-    groupId: session.groupId,
-    duration,
-  });
+  await aiQueue.add(
+    "generate-agenda",
+    { sessionId, groupId: session.groupId, duration, fileIds }
+  );
 
   return { message: "Agenda generation started" };
 };
@@ -279,26 +277,69 @@ export const aiChat = async (
   sessionId: string,
   userId: string,
   message: string,
-  history: { role: string; content: string }[],
 ) => {
-  await assertSessionAccess(sessionId, userId);
+  const session = await assertSessionAccess(sessionId, userId);
 
   if (!message?.trim()) {
     throw new AppError("message is required", 400);
   }
 
-  const historyText = history
-    .slice(-6)
-    .map((m) => `${m.role === "user" ? "Student" : "AI"}: ${m.content}`)
+  // Input length guard — prevents token abuse
+  if (message.length > 2000) {
+    throw new AppError("Message too long (max 2000 characters)", 400);
+  }
+
+  // Fetch recent AI chat history server-side (not from client)
+  const recentMessages = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.isAiChat, true)))
+    .orderBy(desc(messages.createdAt))
+    .limit(20);
+
+  const historyText = recentMessages
+    .reverse()
+    .map((m) => `${m.isAiResponse ? "Vryd AI" : "Student"}: ${m.text}`)
     .join("\n");
 
-  const prompt = `You are a helpful academic study assistant inside a platform called Vyrdly.
-Help students understand material, explain concepts, and support their learning.
-Be concise, clear, and encouraging.
+  // Build session + toolkit context
+  const [groupCtx, toolkitContext] = await Promise.all([
+    buildGroupContext(session.groupId),
+    buildToolkitContext(session.groupId),
+  ]);
 
-${historyText ? `Conversation so far:\n${historyText}\n` : ""}Student: ${message}
-AI:`;
+  const prompt = `
+You are helping a study group with their session.
 
-  const answer = await generateContent(prompt);
+${groupCtx.contextString}
+Session: "${session.title}"
+Session goal: "${session.goal ?? "Study effectively"}"
+
+${toolkitContext ? `Study materials available in this session:\n${toolkitContext}` : ""}
+
+${historyText ? `Recent conversation:\n${historyText}\n` : ""}
+Student: ${message}
+Vryd AI:`.trim();
+
+  const answer = await generateChatContent(prompt);
+
+  // Persist user message and AI response for server-side history
+  await db.insert(messages).values([
+    {
+      sessionId,
+      userId,
+      text: message.trim(),
+      isAiChat: true,
+      isAiResponse: false,
+    },
+    {
+      sessionId,
+      userId,
+      text: answer.trim(),
+      isAiChat: true,
+      isAiResponse: true,
+    },
+  ]);
+
   return { answer: answer.trim() };
 };

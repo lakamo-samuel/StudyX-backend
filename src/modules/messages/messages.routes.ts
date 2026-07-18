@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   getMessagesController,
+  getAiMessagesController,
   saveMessageController,
 } from "./messages.controller";
 import { authenticate } from "../../middleware/auth.middleware";
@@ -15,6 +16,7 @@ const router = Router();
 
 router.use(authenticate);
 
+router.get("/:sessionId/ai", getAiMessagesController);
 router.get("/:sessionId", getMessagesController);
 router.post("/:sessionId", validate(messageSchema), saveMessageController);
 

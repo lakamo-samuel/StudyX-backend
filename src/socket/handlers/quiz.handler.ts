@@ -72,7 +72,11 @@ export const registerQuizHandlers = (io: Server, socket: Socket) => {
 
         if (!question) return;
 
-        const isCorrect = question.correctAnswer.trim() === answer.trim();
+        // Case-insensitive comparison to prevent marking correct answers wrong
+        // due to minor capitalisation differences in AI-generated options
+        const isCorrect =
+          question.correctAnswer.trim().toLowerCase() ===
+          answer.trim().toLowerCase();
 
         // upsert answer
         const existing = await db

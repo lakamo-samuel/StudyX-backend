@@ -17,6 +17,22 @@ export const getMessagesController = async (
   }
 };
 
+export const getAiMessagesController = async (
+  req: Request<{ sessionId: string }>,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const result = await messagesService.getAiMessages(
+      req.params.sessionId,
+      req.user!.userId,
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
 export const saveMessageController = async (
   req: Request<{ sessionId: string }, {}, { text: string }>,
   res: Response,

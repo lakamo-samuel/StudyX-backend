@@ -25,8 +25,7 @@ const assertSessionAccess = async (sessionId: string, userId: string) => {
 }
 
 
-// --GET MESSAGE HISTORY --
-
+// -- GET MESSAGE HISTORY (group chat only — excludes AI chat threads) --
 export const getMessages = async (sessionId: string, userId: string) => {
     await assertSessionAccess(sessionId, userId)
 
@@ -39,7 +38,38 @@ export const getMessages = async (sessionId: string, userId: string) => {
             name: users.name,
             avatar: users.avatar,
         }
-    }).from(messages).innerJoin(users, eq(messages.userId, users.id)).where(eq(messages.sessionId, sessionId)).orderBy(messages.createdAt)
+    })
+    .from(messages)
+    .innerJoin(users, eq(messages.userId, users.id))
+    .where(and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.isAiChat, false),   // ← exclude AI chat messages from group chat
+    ))
+    .orderBy(messages.createdAt)
+}
+
+// -- GET AI MESSAGE HISTORY (only AI chat threads) --
+export const getAiMessages = async (sessionId: string, userId: string) => {
+    await assertSessionAccess(sessionId, userId)
+
+    return db.select({
+        id: messages.id,
+        text: messages.text,
+        createdAt: messages.createdAt,
+        isAiResponse: messages.isAiResponse,
+        user: {
+            id: users.id,
+            name: users.name,
+            avatar: users.avatar,
+        }
+    })
+    .from(messages)
+    .innerJoin(users, eq(messages.userId, users.id))
+    .where(and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.isAiChat, true),
+    ))
+    .orderBy(messages.createdAt)
 }
 
 export const saveMessage = async(

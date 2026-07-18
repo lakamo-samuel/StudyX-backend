@@ -3,7 +3,7 @@ import { db } from "../../config/db";
 import { sessions } from "../../db/schema/sessions";
 import { groupMembers } from "../../db/schema/groups";
 import { eq, and } from "drizzle-orm";
-import { sessionQueue } from "../../jobs/queue";
+import { sessionQueue, aiQueue } from "../../jobs/queue";
 
 export const registerSessionHandlers = (io: Server, socket: Socket) => {
   const userId = socket.data.userId;
@@ -106,11 +106,19 @@ export const registerSessionHandlers = (io: Server, socket: Socket) => {
 
       io.to(sessionId).emit("session:ended", { session: updated });
 
-      console.log(`⏹️ Session ${sessionId} ended by ${userId}`);
+      // Queue AI session summary — reads the full chat transcript
+      await aiQueue.add(
+        "summarize-session",
+        { sessionId, groupId: session.groupId },
+        { jobId: `summary-${sessionId}` },
+      );
+
+      console.log(`⏹️ Session ${sessionId} ended by ${userId} — summary queued`);
     } catch (err) {
       console.error("❌ Session end error:", err);
     }
   });
+
 
   // ── SESSION STATUS CHANGED (broadcast to room) ──
   socket.on(

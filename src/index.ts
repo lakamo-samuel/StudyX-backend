@@ -6,23 +6,23 @@ import { redis } from "./config/redis";
 import { db } from "./config/db";
 import { sql } from "drizzle-orm";
 import { initSocket } from "./socket";
+import { logger } from "./lib/logger";
 
-// start workers
 import "./jobs/worker";
 
 const PORT = env.PORT || 3000;
 
+const httpServer = http.createServer(app);
+
 const start = async () => {
   try {
     await db.execute(sql`SELECT 1`);
-    console.log("✅ Database connected");
+    logger.info("✅ Database connected");
 
     await redis.ping();
-    console.log("✅ Redis connected");
+    logger.info("✅ Redis connected");
 
-    // create HTTP server
-    const httpServer = http.createServer(app);
-
+ 
     // attach Socket.io
     const io = initSocket(httpServer);
 
@@ -30,14 +30,40 @@ const start = async () => {
     app.set("io", io);
 
     httpServer.listen(PORT, () => {
-      console.log(`🚀 Vyrdly server running on port ${PORT}`);
-      console.log(`📡 Environment: ${env.NODE_ENV}`);
-      console.log(`🔌 Socket.io ready`);
+      logger.info(`🚀 Vyrdly server running on port ${PORT}`);
+      logger.info(`📡 Environment: ${env.NODE_ENV}`);
+      logger.info(`🔌 Socket.io ready`);
     });
   } catch (err) {
-    console.error("❌ Failed to start server:", err);
+    logger.fatal({err}, "❌ Failed to start server:");
     process.exit(1);
   }
 };
 
 start();
+
+let isShuttingDown = false;
+
+const shutdown = async (signal: string) => {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  logger.info(`Received ${signal}, shutting down gracefully`)
+  try {
+
+    await new Promise((resolve) => {
+      httpServer.close(() => {
+        logger.info("HTTP server closed")
+        resolve(true)
+      })
+    })
+  
+    await redis.quit();
+    logger.info("Redis connection closed")
+    process.exit(0)
+    
+  }catch(error){
+    logger.error({ error }, "Error during shutdown")
+  }
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"))
+process.on("SIGINT", () => shutdown("SIGINT"))
