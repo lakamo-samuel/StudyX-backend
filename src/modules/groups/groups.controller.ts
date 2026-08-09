@@ -153,3 +153,85 @@ export const deleteGroupController = async (
     next(err);
   }
 };
+
+export const acceptInviteController = async (
+  req: Request<{ groupId: string }>,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const result = await groupsService.acceptInvite(
+      req.params.groupId,
+      req.user!.userId,
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const declineInviteController = async (
+  req: Request<{ groupId: string }>,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const result = await groupsService.declineInvite(
+      req.params.groupId,
+      req.user!.userId,
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const getJoinRequestsController = async (
+  req: Request<{ groupId: string }>,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const result = await groupsService.getJoinRequests(
+      req.params.groupId,
+      req.user!.userId,
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const approveJoinRequestController = async (
+  req: Request<{ groupId: string; requesterId: string }>,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const result = await groupsService.approveJoinRequest(
+      req.params.groupId,
+      req.user!.userId,
+      req.params.requesterId,
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const rejectJoinRequestController = async (
+  req: Request<{ groupId: string; requesterId: string }>,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const result = await groupsService.rejectJoinRequest(
+      req.params.groupId,
+      req.user!.userId,
+      req.params.requesterId,
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};

@@ -119,6 +119,22 @@ export const deleteSessionController = async (
   }
 };
 
+export const bulkDeleteSessionsController = async (
+  req: Request<{}, {}, { sessionIds: string[] }>,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const result = await sessionsService.bulkDeleteSessions(
+      req.body.sessionIds,
+      req.user!.userId,
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
 export const addAgendaItemController = async (
   req: Request<{ sessionId: string }, {}, CreateAgendaItemInput>,
   res: Response,

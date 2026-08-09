@@ -7,6 +7,7 @@ import {
   updateSessionController,
   updateSessionStatusController,
   deleteSessionController,
+  bulkDeleteSessionsController,
   addAgendaItemController,
   updateAgendaItemController,
   deleteAgendaItemController,
@@ -37,6 +38,7 @@ router.get("/group/:groupId", getSessionsByGroupController);
 router.get("/:sessionId", getSessionController);
 router.patch("/:sessionId", validate(updateSessionSchema), updateSessionController);
 router.patch("/:sessionId/status", validate(updateSessionStatusSchema), updateSessionStatusController);
+router.post("/bulk-delete", bulkDeleteSessionsController);
 router.delete("/:sessionId", deleteSessionController);
 
 // ── Agenda ──

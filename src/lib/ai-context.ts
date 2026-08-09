@@ -5,6 +5,9 @@ import { sessions } from "../db/schema/sessions";
 import { files } from "../db/schema/toolkit";
 import { messages } from "../db/schema/messages";
 import { users } from "../db/schema/users";
+import type { Part } from "@google/generative-ai";
+import { downloadFromCloudinary, extractDocxText } from "./file-utils";
+import { getMimeType } from "./gemini";
 
 // ────────────────────────────────────────────────────────
 //  GROUP CONTEXT — injected into every AI prompt
@@ -131,4 +134,103 @@ export const buildToolkitContext = async (
         `[Material ${i + 1}: ${f.name} (${f.type.toUpperCase()})]\n${f.summary}`,
     )
     .join("\n\n");
+};
+
+// ────────────────────────────────────────────────────────
+//  TOOLKIT RAW CONTENT — downloads actual file bytes for
+//  multimodal prompts (quiz / agenda generation)
+// ────────────────────────────────────────────────────────
+
+export interface RawFileContent {
+  name: string;
+  type: string;
+  /** Inline data part for Gemini multimodal call (PDF / image) */
+  inlinePart?: Part;
+  /** Extracted plain text (DOCX / TXT) */
+  textContent?: string;
+  /** Fallback: AI-generated summary if file cannot be read */
+  summary?: string | null;
+}
+
+export const buildToolkitRawContent = async (
+  groupId: string,
+  fileIds?: string[],
+): Promise<{ parts: Part[]; textBlocks: string[]; hasMaterial: boolean }> => {
+  const allFiles = await db.select().from(files).where(eq(files.groupId, groupId));
+
+  const relevant =
+    fileIds && fileIds.length > 0
+      ? allFiles.filter((f) => fileIds.includes(f.id))
+      : allFiles;
+
+  if (relevant.length === 0) {
+    return { parts: [], textBlocks: [], hasMaterial: false };
+  }
+
+  const results = await Promise.all(
+    relevant.map(async (f): Promise<RawFileContent> => {
+      if (!f.url) return { name: f.name, type: f.type, summary: f.summary };
+
+      const { buffer } = await downloadFromCloudinary(f.url).catch(() => ({
+        buffer: null,
+      }));
+
+      if (!buffer || buffer.length < 100) {
+        // Download failed — fall back to summary
+        return { name: f.name, type: f.type, summary: f.summary };
+      }
+
+      // DOCX → extract text
+      if (f.type === "docx") {
+        const text = await extractDocxText(buffer);
+        if (text && text.length > 50) {
+          return { name: f.name, type: f.type, textContent: text };
+        }
+        return { name: f.name, type: f.type, summary: f.summary };
+      }
+
+      // TXT → decode directly
+      if (f.type === "txt") {
+        const text = buffer.toString("utf-8").trim();
+        if (text.length > 50) {
+          return { name: f.name, type: f.type, textContent: text };
+        }
+        return { name: f.name, type: f.type, summary: f.summary };
+      }
+
+      // PDF / image → multimodal inline data
+      if (f.type === "pdf" || f.type === "image") {
+        const mimeType = getMimeType(f.type, f.name);
+        const inlinePart: Part = {
+          inlineData: { mimeType, data: buffer.toString("base64") },
+        };
+        return { name: f.name, type: f.type, inlinePart };
+      }
+
+      // Unknown — try text decode then fall back
+      const text = buffer.toString("utf-8").trim();
+      if (text.length > 50 && !text.includes("\x00")) {
+        return { name: f.name, type: f.type, textContent: text };
+      }
+      return { name: f.name, type: f.type, summary: f.summary };
+    }),
+  );
+
+  const parts: Part[] = [];
+  const textBlocks: string[] = [];
+
+  results.forEach((r, i) => {
+    const label = `[Material ${i + 1}: ${r.name} (${r.type.toUpperCase()})]`;
+    if (r.inlinePart) {
+      // Attach label as a text part before the inline data
+      parts.push({ text: label } as Part);
+      parts.push(r.inlinePart);
+    } else if (r.textContent) {
+      textBlocks.push(`${label}\n${r.textContent}`);
+    } else if (r.summary) {
+      textBlocks.push(`${label} (summary)\n${r.summary}`);
+    }
+  });
+
+  return { parts, textBlocks, hasMaterial: parts.length > 0 || textBlocks.length > 0 };
 };

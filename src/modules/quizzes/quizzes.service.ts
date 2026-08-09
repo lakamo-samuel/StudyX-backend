@@ -255,17 +255,6 @@ export const getSessionDebrief = async (sessionId: string, userId: string) => {
     .orderBy(desc(quizzes.createdAt))
     .limit(1);
 
-  if (!quiz) {
-    return {
-      session,
-      quiz: null,
-      results: null,
-      userScore: null,
-    };
-  }
-
-  const results = await getQuizResults(quiz.id, userId);
-
   let durationStr = "0 min";
   if (session.startedAt && session.endedAt) {
     const diffMs = session.endedAt.getTime() - session.startedAt.getTime();
@@ -274,23 +263,67 @@ export const getSessionDebrief = async (sessionId: string, userId: string) => {
     else {
       const hrs = Math.floor(diffMins / 60);
       const mins = diffMins % 60;
-      durationStr = `${hrs} hr ${mins > 0 ? mins + ' min' : ''}`.trim();
+      durationStr = `${hrs} hr ${mins > 0 ? mins + " min" : ""}`.trim();
     }
   }
 
   const { groupMembers } = await import("../../db/schema/groups");
-  const members = await db.select({ id: groupMembers.id }).from(groupMembers).where(eq(groupMembers.groupId, session.groupId));
+  const members = await db
+    .select({ id: groupMembers.id })
+    .from(groupMembers)
+    .where(eq(groupMembers.groupId, session.groupId));
   const participantCount = members.length;
 
   const enrichedSession = {
     ...session,
     duration: durationStr,
-    participantCount: participantCount.toString()
+    participantCount: participantCount.toString(),
   };
+
+  if (!quiz) {
+    return {
+      session: enrichedSession,
+      quiz: null,
+      results: null,
+      questionBreakdown: null,
+    };
+  }
+
+  const results = await getQuizResults(quiz.id, userId);
+
+  // ── Per-question breakdown for this user ──
+  const questions = await db
+    .select()
+    .from(quizQuestions)
+    .where(eq(quizQuestions.quizId, quiz.id))
+    .orderBy(quizQuestions.order);
+
+  const userAnswerRows = await db
+    .select()
+    .from(quizAnswers)
+    .where(
+      and(eq(quizAnswers.quizId, quiz.id), eq(quizAnswers.userId, userId)),
+    );
+
+  const userAnswerMap = new Map(
+    userAnswerRows.map((a) => [a.questionId, a]),
+  );
+
+  const questionBreakdown = questions.map((q) => {
+    const answer = userAnswerMap.get(q.id);
+    return {
+      question: q.question,
+      options: q.options as string[],
+      correctAnswer: q.correctAnswer,
+      userAnswer: answer?.answer ?? null,
+      isCorrect: answer?.isCorrect ?? null,
+    };
+  });
 
   return {
     session: enrichedSession,
     quiz,
     results,
+    questionBreakdown,
   };
 };

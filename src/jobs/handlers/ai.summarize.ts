@@ -8,90 +8,16 @@ import {
 } from "../../lib/gemini";
 import { buildGroupContext } from "../../lib/ai-context";
 import { getIo } from "../../socket/socket-instance";
-import cloudinary from "../../config/cloudinary";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { env } from "../../config/env";
 import type { Part } from "@google/generative-ai";
+import {
+  downloadFromCloudinary,
+  extractDocxText,
+  extractPptxText,
+} from "../../lib/file-utils";
 
-// ── DOCX extraction via mammoth ──
-async function extractDocxText(buffer: Buffer): Promise<string | null> {
-  try {
-    const mammoth = await import("mammoth");
-    const result = await mammoth.extractRawText({ buffer });
-    return result.value?.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-// ── Download file from Cloudinary using backend credentials ──
-// This works regardless of delivery type (public/authenticated/private)
-// by using Cloudinary's private_download_url which signs with API secret.
-async function downloadFromCloudinary(
-  fileUrl: string,
-): Promise<Buffer | null> {
-  try {
-    // Strategy 1: Direct fetch (works if Cloudinary delivery is public)
-    const response = await axios.get<ArrayBuffer>(fileUrl, {
-      responseType: "arraybuffer",
-      timeout: 30000,
-    });
-    return Buffer.from(response.data);
-  } catch (directErr: any) {
-    const status = directErr.response?.status;
-    if (status !== 401 && status !== 403) {
-      // Network error, not auth — don't retry
-      console.warn(`⚠️  File fetch failed (${status ?? "network"}): ${fileUrl}`);
-      return null;
-    }
-
-    // Strategy 2: Generate a signed download URL using Cloudinary credentials
-    try {
-      console.log("🔑 Direct fetch failed, attempting signed URL download...");
-      const publicId = extractPublicId(fileUrl);
-      if (!publicId) return null;
-
-      // Determine resource type from URL path
-      const resourceType = fileUrl.includes("/raw/") ? "raw" : "image";
-
-      const signedUrl = cloudinary.url(publicId, {
-        sign_url: true,
-        secure: true,
-        type: "upload",
-        resource_type: resourceType,
-      });
-
-      const signedResponse = await axios.get<ArrayBuffer>(signedUrl, {
-        responseType: "arraybuffer",
-        timeout: 30000,
-      });
-      console.log(`✅ Signed URL download succeeded for publicId: ${publicId}`);
-      return Buffer.from(signedResponse.data);
-    } catch (signedErr: any) {
-      console.warn(
-        `⚠️  Signed URL download also failed: ${signedErr.message?.split("\n")[0]}`,
-      );
-      return null;
-    }
-  }
-}
-
-// Extract Cloudinary public_id from a CDN URL
-function extractPublicId(url: string): string | null {
-  try {
-    // CDN URL format:
-    // https://res.cloudinary.com/{cloud}/image/upload/v{ver}/{folder}/{id}.{ext}
-    // https://res.cloudinary.com/{cloud}/raw/upload/v{ver}/{folder}/{id}.{ext}
-    const match = url.match(
-      /\/(?:image|raw|video)\/(?:upload|authenticated)\/(?:v\d+\/)?(.+?)(?:\.[^/.]+)?$/,
-    );
-    return match ? match[1] : null;
-  } catch {
-    return null;
-  }
-}
-
-// ── Build the rich 500-600 word summary prompt ──
+// ── Build comprehensive, study-friendly summary prompt ──
 function buildSummaryPrompt(
   fileName: string,
   fileType: string,
@@ -99,47 +25,84 @@ function buildSummaryPrompt(
   extractedText?: string,
 ): string {
   const contentSection = extractedText
-    ? `Document content (read carefully before writing):\n${extractedText}`
+    ? `Document content (read carefully, extract ALL important information):\n${extractedText}`
     : `File name: "${fileName}" (type: ${fileType.toUpperCase()})`;
 
   const instruction = extractedText
-    ? "Write a precise, comprehensive study summary based ONLY on the document content provided above."
-    : `Based on the file name and subject area, write an estimated study summary.
-Note at the start: "Note: This is an estimated summary based on the file name. Upload the file again if you need an accurate analysis."`;
+    ? "Create a COMPREHENSIVE, well-structured study guide based ONLY on the document content provided above."
+    : `Based on the file name and subject area, create an estimated study guide.
+Include disclaimer: "Note: This is an estimated summary based on the file name. Upload the file for a detailed analysis."`;
 
   return `
-You are an expert academic tutor helping university students understand their study materials.
+You are an expert university-level academic tutor creating comprehensive study guides for students.
 
 ${groupContext ? `Study group context:\n${groupContext}\n` : ""}
 ${contentSection}
 
 ${instruction}
 
-Structure your response EXACTLY as follows (use these exact section headers):
+CREATE AN EXHAUSTIVELY DETAILED STUDY GUIDE with the following structure. Use these EXACT section headers with no symbols (no ===):
 
 OVERVIEW
-Write 3-4 sentences explaining what this document covers, the specific subject area, and its academic significance.
+Write 4-5 sentences explaining:
+- What this document/module is about
+- The specific subject area and discipline
+- Why this material is academically important
+- Learning objectives
+Be detailed and specific.
 
-KEY CONCEPTS
-List exactly 6 of the most important concepts, theories, or frameworks. For each:
+KEY CONCEPTS & DEFINITIONS
+List 8-10 essential concepts, terms, theories, or frameworks. For EACH one:
 - Name the concept clearly
-- Give a 2-sentence explanation specific to this material
-Be specific — use actual terminology from the document, not generic descriptions.
+- Write 3-4 sentences explaining it with specific examples from the document
+- Explain how it relates to other concepts
+Be thorough — these are key terms for exam study.
 
-CRITICAL DETAILS
-List 5-6 specific facts, formulas, definitions, dates, or processes that are commonly examined.
-Be precise — extract actual content from the document, not generalities.
+TOPICS BY UNIT/SECTION
+Break down the material by unit or major section. For each:
+- Unit name/number
+- 3-5 bullet points of key information
+- Sub-topics if applicable
+- Specific examples or case studies mentioned
+Make this section detailed and well-organized for easy reference.
 
-EXAM QUESTIONS
-Write 4 exam-style questions that test deep understanding of this material.
-Make them specific to the content (not generic "what is X" questions).
+CRITICAL DETAILS & FACTS
+List 8-10 specific facts, definitions, formulas, dates, percentages, processes, or step-by-step procedures.
+Be precise — extract EXACT content from the document.
+Format as numbered list for easy studying.
 
-STUDY STRATEGY
-Give one concrete, subject-specific tip for mastering this material.
+PRACTICAL EXAMPLES & CASE STUDIES
+Highlight real-world examples, case studies, scenarios, or applications mentioned in the material.
+Explain how each demonstrates the concepts.
+This helps students connect theory to practice.
 
-Target length: 500-600 words. Be specific and academic throughout.
-Do NOT use markdown bold (**) or hash symbols (#). Use plain text with the section headers above.
-Do NOT write generic descriptions. Every sentence must reference actual content.
+EXAM-STYLE QUESTIONS
+Write 6 challenging questions that test deep understanding:
+- 2 definition/concept questions
+- 2 application/analysis questions
+- 2 synthesis/comparison questions
+Make them specific to the content, not generic.
+Include model answers (2-3 sentences each).
+
+COMMON PITFALLS & TRICKY CONCEPTS
+List 3-4 areas where students often struggle or make mistakes.
+Explain the correct understanding for each.
+
+STUDY TIPS & MEMORY AIDS
+Provide 2-3 concrete, subject-specific strategies for mastering this material.
+Include mnemonics, analogies, or learning techniques if applicable.
+
+RECOMMENDED NEXT STEPS
+Suggest what students should review next or practice to solidify understanding.
+
+IMPORTANT FORMATTING RULES:
+- Use UPPERCASE section headers with a blank line before and after (no === symbols)
+- Use bullet points (- ) and numbering (1. ) for readability
+- Be comprehensive and detailed — assume the student is studying for an exam
+- DO NOT use markdown formatting (**bold**, #headers, etc.)
+- EVERY section must be substantial (3-10 sentences minimum)
+- Extract ACTUAL content from the document, not generic descriptions
+- Target length: 1200-1500 words (comprehensive, not brief)
 `.trim();
 }
 
@@ -152,7 +115,7 @@ async function generateFromBuffer(
   const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash",
-    generationConfig: { maxOutputTokens: 3000, temperature: 0.4 },
+    generationConfig: { maxOutputTokens: 5000, temperature: 0.3 },
   });
 
   const parts: Part[] = [
@@ -177,7 +140,7 @@ export const handleAiSummarize = async (job: {
   console.log(`🤖 Generating summary for: "${fileName}" (${fileType})`);
 
   try {
-    // Fetch group context for personalisation
+    // Fetch group context and file record for notifications
     const [fileRecord] = await db
       .select({ groupId: files.groupId })
       .from(files)
@@ -190,11 +153,13 @@ export const handleAiSummarize = async (job: {
     const groupContext = groupCtx?.contextString ?? "";
 
     let summary: string;
-    let summarySource: "multimodal" | "docx-extracted" | "text-extracted" | "context-only" =
+    let summarySource: "multimodal" | "docx-extracted" | "pptx-extracted" | "text-extracted" | "context-only" =
       "context-only";
+    let downloadError: string | null = null;
 
     if (fileUrl) {
-      const buffer = await downloadFromCloudinary(fileUrl);
+      const { buffer, error } = await downloadFromCloudinary(fileUrl);
+      downloadError = error || null;
 
       if (buffer && buffer.length > 100) {
         // ── DOCX: extract text via mammoth, then text-only prompt ──
@@ -207,6 +172,22 @@ export const handleAiSummarize = async (job: {
             console.log(`📄 DOCX extracted: ${docxText.length} chars`);
           } else {
             // DOCX extraction failed → fall through to context-only
+            console.warn(`⚠️  Failed to extract text from DOCX "${fileName}"`);
+            const prompt = buildSummaryPrompt(fileName, fileType, groupContext);
+            summary = await generateChatContent(prompt);
+          }
+        }
+        // ── PPTX: extract text via JSZip ──
+        else if (fileType === "pptx") {
+          const pptxText = await extractPptxText(buffer);
+          if (pptxText && pptxText.length > 50) {
+            const prompt = buildSummaryPrompt(fileName, fileType, groupContext, pptxText);
+            summary = await generateChatContent(prompt);
+            summarySource = "pptx-extracted";
+            console.log(`📊 PPTX extracted: ${pptxText.length} chars`);
+          } else {
+            // PPTX extraction failed → fall through to context-only
+            console.warn(`⚠️  Failed to extract text from PPTX "${fileName}"`);
             const prompt = buildSummaryPrompt(fileName, fileType, groupContext);
             summary = await generateChatContent(prompt);
           }
@@ -246,6 +227,7 @@ export const handleAiSummarize = async (job: {
             const prompt = buildSummaryPrompt(fileName, fileType, groupContext, textContent);
             summary = await generateChatContent(prompt);
             summarySource = "text-extracted";
+            console.log(`📝 Unknown type decoded as text: ${textContent.length} chars`);
           } else {
             const prompt = buildSummaryPrompt(fileName, fileType, groupContext);
             summary = await generateChatContent(prompt);
@@ -253,7 +235,9 @@ export const handleAiSummarize = async (job: {
         }
       } else {
         // File download failed entirely
-        console.warn(`⚠️  Could not download file "${fileName}" — using context-only summary`);
+        console.warn(
+          `⚠️  Could not download file "${fileName}" — error: ${downloadError}`,
+        );
         const prompt = buildSummaryPrompt(fileName, fileType, groupContext);
         summary = await generateChatContent(prompt);
       }
@@ -263,12 +247,17 @@ export const handleAiSummarize = async (job: {
       summary = await generateChatContent(prompt);
     }
 
-    // Only prepend disclaimer for context-only summaries
-    const finalSummary =
-      summarySource === "context-only"
-        ? `[Estimated summary — file could not be read directly. Re-upload the file for a more accurate analysis]\n\n${summary}`
-        : summary;
+    // Build final summary with appropriate disclaimer
+    let finalSummary = summary;
+    if (summarySource === "context-only" && downloadError) {
+      // File couldn't be downloaded — be explicit
+      finalSummary = `[⚠️ Could not read file directly: ${downloadError}. Summary based on filename only. Please verify accuracy.]\n\n${summary}`;
+    } else if (summarySource === "context-only") {
+      // No file URL provided
+      finalSummary = `[ℹ️ Estimated summary based on file name. Upload the file again for detailed analysis.]\n\n${summary}`;
+    }
 
+    // Save to database
     await db
       .update(files)
       .set({ hasAiSummary: true, summary: finalSummary })
@@ -276,19 +265,38 @@ export const handleAiSummarize = async (job: {
 
     console.log(`✅ Summary saved for "${fileName}" (source: ${summarySource})`);
 
-    // Real-time push to group room
+    // Real-time push to client
     const io = getIo();
     if (io && fileRecord) {
       io.to(fileRecord.groupId).emit("file:summary-ready", {
         fileId,
         summary: finalSummary,
         summarySource,
+        downloadError,
       });
     }
 
-    return { fileId, summarySource };
+    return { fileId, summarySource, downloadError };
   } catch (err) {
     console.error(`❌ Failed to summarize "${fileName}":`, err);
+
+    // Notify client of failure
+    const [fileRecord] = await db
+      .select({ groupId: files.groupId })
+      .from(files)
+      .where(eq(files.id, fileId))
+      .limit(1);
+
+    const io = getIo();
+    if (io && fileRecord) {
+      io.to(fileRecord.groupId).emit("file:summary-error", {
+        fileId,
+        fileName,
+        message: "Failed to generate summary. Please try again later.",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     throw err;
   }
 };

@@ -2,9 +2,10 @@ import { z } from "zod";
 import { db } from "../../config/db";
 import { sessionAgenda, sessions } from "../../db/schema/sessions";
 import { eq } from "drizzle-orm";
-import { generateJson } from "../../lib/gemini";
-import { buildGroupContext, buildToolkitContext } from "../../lib/ai-context";
+import { generateJson, generateJsonFromParts } from "../../lib/gemini";
+import { buildGroupContext, buildToolkitRawContent } from "../../lib/ai-context";
 import { getIo } from "../../socket/socket-instance";
+import type { Part } from "@google/generative-ai";
 
 // ────────────────────────────────────────────────────────
 //  ZOD SCHEMA — validates every agenda item Gemini returns
@@ -40,15 +41,26 @@ export const handleAiAgenda = async (job: {
       .where(eq(sessions.id, sessionId))
       .limit(1);
 
-    const [groupCtx, toolkitContext] = await Promise.all([
+    // ── Load actual file content (PDFs/images inline, DOCX/TXT extracted) ──
+    const [groupCtx, rawContent] = await Promise.all([
       buildGroupContext(groupId),
-      buildToolkitContext(
+      buildToolkitRawContent(
         groupId,
         fileIds && fileIds.length > 0 ? fileIds : undefined,
       ),
     ]);
 
-    const prompt = `
+    const textMaterialsSection =
+      rawContent.textBlocks.length > 0
+        ? `Study materials for this session (use to plan topic blocks):\n\n${rawContent.textBlocks.join("\n\n")}`
+        : "";
+
+    const noMaterialsNote =
+      !rawContent.hasMaterial
+        ? "No study materials uploaded — plan based on the session title and goal."
+        : "";
+
+    const promptText = `
 You are a professional academic session planner for university students.
 
 ${groupCtx.contextString}
@@ -56,13 +68,15 @@ Session title: "${session?.title ?? "Study Session"}"
 Session goal: "${session?.goal ?? "Study effectively"}"
 Session duration: ${duration} minutes
 
-${toolkitContext ? `Study materials for this session:\n${toolkitContext}` : "No study materials uploaded — plan based on the session title and goal."}
+${textMaterialsSection}
+${noMaterialsNote}
+${rawContent.parts.length > 0 ? "The study materials are attached as files. Read them to identify specific topics for the agenda." : ""}
 
 Create a well-structured session agenda. The time blocks MUST add up to exactly ${duration} minutes.
 
 Structure:
 - Start with a warm-up/review block (5–10 min)
-- Include substantive topic blocks covering the session goal and materials
+- Include substantive topic blocks covering the session goal and materials (name specific topics from the materials)
 - If duration > 60 min, add a short break (5–10 min)
 - End with a Q&A/wrap-up block (10–15 min)
 - Total items: 4–7 (inclusive)
@@ -80,7 +94,22 @@ Return ONLY a JSON array — no markdown fences, no explanation:
 CRITICAL: The sum of all durationMinutes values MUST equal exactly ${duration}.
     `.trim();
 
-    const raw = await generateJson(prompt);
+    // ── Choose call strategy: multimodal (PDF/image parts) vs text-only ──
+    let raw: string;
+    if (rawContent.parts.length > 0) {
+      const allParts: Part[] = [
+        { text: promptText } as Part,
+        ...(rawContent.textBlocks.length > 0
+          ? [{ text: rawContent.textBlocks.join("\n\n") } as Part]
+          : []),
+        ...rawContent.parts,
+      ];
+      console.log(`📎 Using multimodal agenda generation (${rawContent.parts.length / 2} file(s) inline)`);
+      raw = await generateJsonFromParts(allParts);
+    } else {
+      console.log("📝 Using text-only agenda generation");
+      raw = await generateJson(promptText);
+    }
 
     // ── Validate with Zod ──
     let agendaItems: z.infer<typeof AgendaArraySchema>;
@@ -89,9 +118,10 @@ CRITICAL: The sum of all durationMinutes values MUST equal exactly ${duration}.
       agendaItems = AgendaArraySchema.parse(
         Array.isArray(parsed) ? parsed : [parsed],
       );
-    } catch (parseErr: any) {
+    } catch (parseErr: unknown) {
+      const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
       throw new Error(
-        `Gemini returned invalid agenda JSON: ${parseErr.message}. Raw: ${raw.slice(0, 200)}`,
+        `Gemini returned invalid agenda JSON: ${msg}. Raw: ${raw.slice(0, 200)}`,
       );
     }
 
@@ -104,7 +134,6 @@ CRITICAL: The sum of all durationMinutes values MUST equal exactly ${duration}.
     let finalItems = agendaItems;
 
     if (Math.abs(totalMinutes - duration) > 5) {
-      // Scale durations proportionally to match requested duration
       console.warn(
         `⚠️  Agenda time sum (${totalMinutes} min) deviates from target (${duration} min). Scaling...`,
       );
@@ -137,7 +166,6 @@ CRITICAL: The sum of all durationMinutes values MUST equal exactly ${duration}.
       .delete(sessionAgenda)
       .where(eq(sessionAgenda.sessionId, sessionId));
 
-    // Single batch insert
     await db.insert(sessionAgenda).values(
       finalItems.map((item) => ({
         sessionId,
@@ -148,7 +176,7 @@ CRITICAL: The sum of all durationMinutes values MUST equal exactly ${duration}.
       })),
     );
 
-    // Fetch updated session and agenda to broadcast
+    // ── Fetch updated session and agenda to broadcast ──
     const [updatedSession] = await db
       .select()
       .from(sessions)

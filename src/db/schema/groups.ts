@@ -11,6 +11,7 @@ import { users } from "./users";
 
 export const visibilityEnum = pgEnum("visibility", ["public", "private"]);
 export const memberRoleEnum = pgEnum("member_role", ["admin", "member"]);
+export const memberStatusEnum = pgEnum("member_status", ["pending", "approved", "rejected", "invited"]);
 
 export const groups = pgTable("groups", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -34,6 +35,7 @@ export const groupMembers = pgTable("group_members", {
     .references(() => users.id, { onDelete: "cascade" })
     .notNull(),
   role: memberRoleEnum("role").default("member").notNull(),
+  status: memberStatusEnum("status").default("approved").notNull(),
   joinedAt: timestamp("joined_at").defaultNow().notNull(),
 });
 

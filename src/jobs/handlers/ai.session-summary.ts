@@ -1,6 +1,7 @@
 import { db } from "../../config/db";
-import { sessions } from "../../db/schema/sessions";
+import { sessions, sessionAgenda } from "../../db/schema/sessions";
 import { groupMembers } from "../../db/schema/groups";
+import { quizzes, quizQuestions, quizAnswers } from "../../db/schema/quizzes";
 import { eq, and, count } from "drizzle-orm";
 import {
   buildGroupContext,
@@ -49,7 +50,7 @@ export const handleAiSessionSummary = async (job: {
     }
 
     // Build all context in parallel
-    const [groupCtx, transcript, toolkitContext, memberResult] =
+    const [groupCtx, transcript, toolkitContext, memberResult, agendaItems] =
       await Promise.all([
         buildGroupContext(groupId),
         buildSessionTranscript(sessionId, 300),
@@ -57,15 +58,82 @@ export const handleAiSessionSummary = async (job: {
         db
           .select({ count: count() })
           .from(groupMembers)
-          .where(
-            and(
-              eq(groupMembers.groupId, groupId),
-            ),
-          ),
+          .where(and(eq(groupMembers.groupId, groupId))),
+        db
+          .select()
+          .from(sessionAgenda)
+          .where(eq(sessionAgenda.sessionId, sessionId))
+          .orderBy(sessionAgenda.order),
       ]);
 
     const memberCount = Number(memberResult[0]?.count ?? 0);
     const hasTranscript = transcript.text.trim().length > 0;
+
+    // Fetch quiz performance for context
+    const [quiz] = await db
+      .select()
+      .from(quizzes)
+      .where(eq(quizzes.sessionId, sessionId))
+      .limit(1);
+
+    let quizSummaryText = "No quiz was taken during this session.";
+    if (quiz) {
+      const allAnswers = await db
+        .select()
+        .from(quizAnswers)
+        .where(eq(quizAnswers.quizId, quiz.id));
+
+      const questions = await db
+        .select()
+        .from(quizQuestions)
+        .where(eq(quizQuestions.quizId, quiz.id))
+        .orderBy(quizQuestions.order);
+
+      const totalQuestions = questions.length;
+      const participantIds = [...new Set(allAnswers.map((a) => a.userId))];
+      const totalParticipants = participantIds.length;
+
+      // Per-question accuracy
+      const questionStats = questions.map((q) => {
+        const qAnswers = allAnswers.filter((a) => a.questionId === q.id);
+        const correct = qAnswers.filter((a) => a.isCorrect).length;
+        const pct =
+          qAnswers.length > 0
+            ? Math.round((correct / qAnswers.length) * 100)
+            : 0;
+        return { question: q.question, pct, correct, total: qAnswers.length };
+      });
+
+      const weakQuestions = questionStats
+        .filter((q) => q.pct < 60)
+        .map((q) => `"${q.question}" (${q.pct}% correct)`);
+
+      const strongQuestions = questionStats
+        .filter((q) => q.pct >= 80)
+        .map((q) => `"${q.question}" (${q.pct}% correct)`);
+
+      quizSummaryText = [
+        `Quiz: ${totalQuestions} questions, ${totalParticipants} participant(s) answered.`,
+        strongQuestions.length > 0
+          ? `Strong questions (>=80%): ${strongQuestions.join("; ")}`
+          : "",
+        weakQuestions.length > 0
+          ? `Weak questions (<60%): ${weakQuestions.join("; ")}`
+          : "All questions were answered well.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    const agendaText =
+      agendaItems.length > 0
+        ? agendaItems
+            .map(
+              (item) =>
+                `  ${item.done ? "[done]" : "[not done]"} ${item.topic}`,
+            )
+            .join("\n")
+        : "No agenda was set.";
 
     const prompt = `
 You are writing a comprehensive study session debrief for university students.
@@ -75,7 +143,13 @@ Session: "${session.title}"
 Goal: "${session.goal ?? "Study effectively"}"
 Duration: ${durationStr}
 Participants: ${memberCount} students
+
+Agenda covered:
+${agendaText}
 ${toolkitContext ? `\nStudy materials used:\n${toolkitContext}` : ""}
+
+Quiz performance:
+${quizSummaryText}
 
 ${
   hasTranscript
@@ -83,25 +157,24 @@ ${
     : "No chat messages were recorded during this session."
 }
 
-Write a comprehensive session summary structured exactly as follows:
+Write a comprehensive session summary structured exactly as follows. Use the section headers exactly as shown. Do NOT use markdown symbols like ** or #.
 
 WHAT WAS COVERED
-Write 2–3 paragraphs describing the main topics discussed, concepts explained, and key decisions or conclusions reached during the session. Be specific — reference actual things discussed, not generic statements.
+2-3 paragraphs describing the main topics discussed, concepts explained, and key points from the session. Reference the agenda items, study materials, and anything from the chat transcript. Be specific — not generic.
 
 KEY TAKEAWAYS
-List 5–7 of the most important things students learned or concluded from this session. Each takeaway should be a complete, informative sentence.
+List 5-7 of the most important things students should remember from this session. Each should be a complete, informative sentence tied to the actual content.
 
-UNRESOLVED QUESTIONS
-List any topics that were raised but not fully resolved, or areas where students seemed confused or needed more time. If none were detected, say "All major questions were addressed in this session."
+AREAS THAT NEED MORE WORK
+Based on the quiz performance and discussion, list the specific topics or concepts the group struggled with. If quiz data shows weak questions, name the exact concepts. If no quiz, infer from the discussion.
 
-NEXT STEPS
-List 3–4 concrete action items or topics the group should focus on in the next session based on what happened in this one.
+WHAT TO STUDY NEXT
+List 3-4 concrete topics or action items the group should focus on before the next session, based on gaps identified today.
 
-PARTICIPATION SUMMARY
-Write 2–3 sentences on the overall quality and engagement of the discussion (was it focused? Did students contribute actively? Was the session productive?). Do NOT name or identify individual participants.
+SESSION QUALITY
+2-3 sentences on how productive and focused the session was overall. Was the agenda completed? Did the discussion stay on track? Do not name individual participants.
 
-Target length: 500–700 words. Be specific and reference actual session content where available.
-Do NOT use markdown symbols. Use the section headers exactly as shown above.
+Target length: 500-700 words total. Be specific and reference actual session content.
     `.trim();
 
     const summary = await generateChatContent(prompt);

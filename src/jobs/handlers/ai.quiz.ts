@@ -3,9 +3,10 @@ import { db } from "../../config/db";
 import { quizzes, quizQuestions } from "../../db/schema/quizzes";
 import { sessions } from "../../db/schema/sessions";
 import { eq } from "drizzle-orm";
-import { generateJson } from "../../lib/gemini";
-import { buildGroupContext, buildToolkitContext } from "../../lib/ai-context";
+import { generateJson, generateJsonFromParts } from "../../lib/gemini";
+import { buildGroupContext, buildToolkitRawContent } from "../../lib/ai-context";
 import { getIo } from "../../socket/socket-instance";
+import type { Part } from "@google/generative-ai";
 
 // ────────────────────────────────────────────────────────
 //  ZOD SCHEMA — validates every question Gemini returns
@@ -40,17 +41,17 @@ export const handleAiQuiz = async (job: {
   console.log(`🤖 Generating quiz for session: ${sessionId}`);
 
   try {
-    // Fetch session details
+    // ── Fetch session details ──
     const [session] = await db
       .select()
       .from(sessions)
       .where(eq(sessions.id, sessionId))
       .limit(1);
 
-    // Build context
-    const [groupCtx, toolkitContext] = await Promise.all([
+    // ── Load actual file content (PDFs/images inline, DOCX/TXT extracted) ──
+    const [groupCtx, rawContent] = await Promise.all([
       buildGroupContext(groupId),
-      buildToolkitContext(groupId, fileIds.length > 0 ? fileIds : undefined),
+      buildToolkitRawContent(groupId, fileIds.length > 0 ? fileIds : undefined),
     ]);
 
     const sessionInfo = session
@@ -59,16 +60,28 @@ export const handleAiQuiz = async (job: {
 
     const topicLine = topic ? `Focus topic: "${topic}"` : "";
 
-    const prompt = `
+    const textMaterialsSection =
+      rawContent.textBlocks.length > 0
+        ? `Study materials (read carefully before generating questions):\n\n${rawContent.textBlocks.join("\n\n")}`
+        : "";
+
+    const noMaterialsNote =
+      !rawContent.hasMaterial
+        ? "No study materials uploaded — generate questions based on the session topic and goal."
+        : "";
+
+    const promptText = `
 You are generating a multiple-choice quiz for a university group study session.
 
 ${groupCtx.contextString}
 ${sessionInfo}
 ${topicLine}
 
-${toolkitContext ? `Study materials used in this session:\n${toolkitContext}` : "No study materials uploaded — generate questions based on the session topic and goal."}
+${textMaterialsSection}
+${noMaterialsNote}
+${rawContent.parts.length > 0 ? "The study materials are attached as files. Read them carefully before generating questions." : ""}
 
-Generate exactly ${questionCount} multiple-choice questions STRICTLY based on the context above.
+Generate exactly ${questionCount} multiple-choice questions STRICTLY based on the materials and context above.
 Do NOT invent facts not supported by the materials or session goal.
 Every question must be directly answerable from the information provided.
 
@@ -92,16 +105,33 @@ Return ONLY a JSON array — no explanation, no markdown fences, no extra text:
 You MUST return exactly ${questionCount} questions.
     `.trim();
 
-    const raw = await generateJson(prompt);
+    // ── Choose call strategy: multimodal (PDF/image parts) vs text-only ──
+    let raw: string;
+    if (rawContent.parts.length > 0) {
+      // Build parts array: prompt text → text material blocks → inline file data
+      const allParts: Part[] = [
+        { text: promptText } as Part,
+        ...(rawContent.textBlocks.length > 0
+          ? [{ text: rawContent.textBlocks.join("\n\n") } as Part]
+          : []),
+        ...rawContent.parts,
+      ];
+      console.log(`📎 Using multimodal quiz generation (${rawContent.parts.length / 2} file(s) inline)`);
+      raw = await generateJsonFromParts(allParts);
+    } else {
+      console.log("📝 Using text-only quiz generation");
+      raw = await generateJson(promptText);
+    }
 
     // ── Validate with Zod (no silent crashes) ──
     let questions: z.infer<typeof QuizArraySchema>;
     try {
       const parsed = JSON.parse(raw);
       questions = QuizArraySchema.parse(Array.isArray(parsed) ? parsed : [parsed]);
-    } catch (parseErr: any) {
+    } catch (parseErr: unknown) {
+      const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
       throw new Error(
-        `Gemini returned invalid quiz JSON: ${parseErr.message}. Raw: ${raw.slice(0, 200)}`,
+        `Gemini returned invalid quiz JSON: ${msg}. Raw: ${raw.slice(0, 200)}`,
       );
     }
 
@@ -111,7 +141,9 @@ You MUST return exactly ${questionCount} questions.
       order: i,
     }));
 
-    // ── Save quiz — single batch insert instead of N parallel queries ──
+    // ── Save quiz — delete existing quiz for this session first, then insert new one ──
+    await db.delete(quizzes).where(eq(quizzes.sessionId, sessionId));
+
     const [quiz] = await db
       .insert(quizzes)
       .values({ sessionId, groupId })
@@ -129,7 +161,7 @@ You MUST return exactly ${questionCount} questions.
 
     console.log(`✅ Quiz generated for session: ${sessionId} (${finalQuestions.length} questions)`);
 
-    // Notify all clients in the session room
+    // ── Notify all clients in the session room ──
     const io = getIo();
     if (io) {
       io.to(sessionId).emit("quiz:ready", {
@@ -144,7 +176,7 @@ You MUST return exactly ${questionCount} questions.
   } catch (err) {
     console.error(`❌ Failed to generate quiz for session ${sessionId}:`, err);
 
-    // Notify clients of failure
+    // ── Notify clients of failure ──
     const io = getIo();
     if (io) {
       io.to(sessionId).emit("quiz:error", {

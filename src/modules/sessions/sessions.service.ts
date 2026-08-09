@@ -1,10 +1,10 @@
-import { eq, and, inArray, desc } from "drizzle-orm";
+import { eq, and, inArray, desc, gte } from "drizzle-orm";
 import { db } from "../../config/db";
 import { sessions, sessionAgenda } from "../../db/schema/sessions";
 import { groupMembers } from "../../db/schema/groups";
 import { messages } from "../../db/schema/messages";
 import { AppError } from "../../middleware/error.middleware";
-import { generateChatContent } from "../../lib/gemini";
+import { generateChatContent, generateSessionChat } from "../../lib/gemini";
 import { buildGroupContext, buildToolkitContext } from "../../lib/ai-context";
 import { aiQueue } from "../../jobs/queue";
 import type {
@@ -65,12 +65,18 @@ export const createSession = async (
 
 // ── GET SESSIONS BY GROUP ──
 export const getSessionsByGroup = async (groupId: string, userId: string) => {
-  await assertGroupMember(groupId, userId);
+  const member = await assertGroupMember(groupId, userId);
 
+  // Only show sessions created on or after the user joined the group
   return db
     .select()
     .from(sessions)
-    .where(eq(sessions.groupId, groupId))
+    .where(
+      and(
+        eq(sessions.groupId, groupId),
+        gte(sessions.createdAt, member.joinedAt),
+      ),
+    )
     .orderBy(sessions.createdAt);
 };
 
@@ -179,6 +185,28 @@ export const deleteSession = async (sessionId: string, userId: string) => {
   return { message: "Session deleted successfully" };
 };
 
+// ── BULK DELETE SESSIONS ──
+export const bulkDeleteSessions = async (sessionIds: string[], userId: string) => {
+  if (!sessionIds.length) throw new AppError("No session IDs provided", 400);
+
+  // Verify user is a member of all session groups and none are active
+  const sessionRows = await db
+    .select()
+    .from(sessions)
+    .where(inArray(sessions.id, sessionIds));
+
+  for (const s of sessionRows) {
+    await assertGroupMember(s.groupId, userId);
+    if (s.status === "active") {
+      throw new AppError(`Cannot delete active session: ${s.title}`, 400);
+    }
+  }
+
+  await db.delete(sessions).where(inArray(sessions.id, sessionIds));
+
+  return { message: `${sessionIds.length} session(s) deleted` };
+};
+
 // ── ADD AGENDA ITEM ──
 export const addAgendaItem = async (
   sessionId: string,
@@ -284,46 +312,70 @@ export const aiChat = async (
     throw new AppError("message is required", 400);
   }
 
-  // Input length guard — prevents token abuse
   if (message.length > 2000) {
     throw new AppError("Message too long (max 2000 characters)", 400);
   }
 
-  // Fetch recent AI chat history server-side (not from client)
-  const recentMessages = await db
-    .select()
-    .from(messages)
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.isAiChat, true)))
-    .orderBy(desc(messages.createdAt))
-    .limit(20);
-
-  const historyText = recentMessages
-    .reverse()
-    .map((m) => `${m.isAiResponse ? "Vryd AI" : "Student"}: ${m.text}`)
-    .join("\n");
-
-  // Build session + toolkit context
-  const [groupCtx, toolkitContext] = await Promise.all([
+  // Fetch all context in parallel
+  const [recentMessages, agenda, groupCtx, toolkitContext] = await Promise.all([
+    db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.sessionId, sessionId), eq(messages.isAiChat, true)))
+      .orderBy(desc(messages.createdAt))
+      .limit(20),
+    db
+      .select()
+      .from(sessionAgenda)
+      .where(eq(sessionAgenda.sessionId, sessionId))
+      .orderBy(sessionAgenda.order),
     buildGroupContext(session.groupId),
     buildToolkitContext(session.groupId),
   ]);
 
-  const prompt = `
-You are helping a study group with their session.
+  // Build the system context string — injected into the model for every response
+  const agendaText =
+    agenda.length > 0
+      ? agenda
+          .map(
+            (item) =>
+              `  - ${item.done ? "[done]" : "[pending]"} ${item.timeBlock ? `${item.timeBlock}: ` : ""}${item.topic}`,
+          )
+          .join("\n")
+      : "No agenda set for this session yet.";
 
-${groupCtx.contextString}
-Session: "${session.title}"
-Session goal: "${session.goal ?? "Study effectively"}"
+  const systemContext = [
+    `SESSION CONTEXT`,
+    `${groupCtx.contextString}`,
+    `Session title: "${session.title}"`,
+    `Session goal: "${session.goal ?? "Study effectively"}"`,
+    ``,
+    `SESSION AGENDA (current state):`,
+    agendaText,
+    toolkitContext
+      ? `\nSTUDY MATERIALS (from uploaded files — use this to answer questions):\n${toolkitContext}`
+      : `\nNo study materials have been uploaded yet for this group.`,
+  ]
+    .join("\n")
+    .trim();
 
-${toolkitContext ? `Study materials available in this session:\n${toolkitContext}` : ""}
+  // Reconstruct conversation history in Gemini's role format (oldest first)
+  // Gemini requires: history must start with 'user' and alternate user/model
+  const rawHistory = recentMessages
+    .reverse()
+    .map((m) => ({
+      role: (m.isAiResponse ? "model" : "user") as "user" | "model",
+      text: m.text,
+    }));
 
-${historyText ? `Recent conversation:\n${historyText}\n` : ""}
-Student: ${message}
-Vryd AI:`.trim();
+  // Drop leading 'model' turns — Gemini requires history to start with 'user'
+  const firstUserIdx = rawHistory.findIndex((h) => h.role === "user");
+  const history = firstUserIdx > 0 ? rawHistory.slice(firstUserIdx) : rawHistory;
 
-  const answer = await generateChatContent(prompt);
+  // Get AI response using native chat API with proper role separation
+  const answer = await generateSessionChat(systemContext, history, message.trim());
 
-  // Persist user message and AI response for server-side history
+  // Persist both turns for server-side history
   await db.insert(messages).values([
     {
       sessionId,

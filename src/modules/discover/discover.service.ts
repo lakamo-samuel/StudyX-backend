@@ -3,6 +3,7 @@ import { db } from "../../config/db";
 import { groups, groupMembers } from "../../db/schema/groups";
 import { sessions } from "../../db/schema/sessions";
 import { users } from "../../db/schema/users";
+import { notifications } from "../../db/schema/notifications";
 
 // ── SEARCH PUBLIC GROUPS ──
 export const searchGroups = async (
@@ -132,7 +133,22 @@ export const joinPublicGroup = async (groupId: string, userId: string) => {
     groupId,
     userId,
     role: "member",
+    status: "pending",
   });
 
-  return { message: "Successfully joined the group" };
+  // Get user details for notification
+  const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+
+  // Send notification to admin
+  if (user) {
+    await db.insert(notifications).values({
+      userId: group.adminId,
+      type: "group",
+      title: "New Join Request",
+      body: `${user.name} wants to join "${group.name}".`,
+      linkTo: `/groups/${groupId}`,
+    });
+  }
+
+  return { message: "Join request sent to the group admin" };
 };

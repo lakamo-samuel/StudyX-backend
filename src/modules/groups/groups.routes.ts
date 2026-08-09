@@ -9,6 +9,11 @@ import {
   changeMemberRoleController,
   leaveGroupController,
   deleteGroupController,
+  getJoinRequestsController,
+  approveJoinRequestController,
+  rejectJoinRequestController,
+  acceptInviteController,
+  declineInviteController,
 } from "./groups.controller";
 import { validate } from "../../middleware/validate.middleware";
 import { authenticate } from "../../middleware/auth.middleware";
@@ -40,5 +45,10 @@ router.patch(
   changeMemberRoleController,
 );
 router.post("/:groupId/leave", leaveGroupController);
+router.get("/:groupId/join-requests", getJoinRequestsController);
+router.post("/:groupId/join-requests/:requesterId/approve", approveJoinRequestController);
+router.post("/:groupId/join-requests/:requesterId/reject", rejectJoinRequestController);
+router.post("/:groupId/invites/accept", acceptInviteController);
+router.post("/:groupId/invites/decline", declineInviteController);
 
 export default router;

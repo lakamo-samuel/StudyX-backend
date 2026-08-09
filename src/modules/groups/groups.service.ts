@@ -2,6 +2,7 @@ import { eq, and } from "drizzle-orm";
 import { db } from "../../config/db";
 import { groups, groupMembers } from "../../db/schema/groups";
 import { users } from "../../db/schema/users";
+import { notifications } from "../../db/schema/notifications";
 import { AppError } from "../../middleware/error.middleware";
 import type {
   CreateGroupInput,
@@ -35,7 +36,7 @@ export const getUserGroups = async (userId: string) => {
     })
     .from(groupMembers)
     .innerJoin(groups, eq(groupMembers.groupId, groups.id))
-    .where(eq(groupMembers.userId, userId));
+    .where(and(eq(groupMembers.userId, userId), eq(groupMembers.status, "approved")));
 
   return members.map((m) => ({ ...m.group, role: m.role }));
 };
@@ -67,13 +68,17 @@ export const getGroup = async (groupId: string, userId: string) => {
       email: users.email,
       avatar: users.avatar,
       role: groupMembers.role,
+      status: groupMembers.status,
       joinedAt: groupMembers.joinedAt,
     })
     .from(groupMembers)
     .innerJoin(users, eq(groupMembers.userId, users.id))
     .where(eq(groupMembers.groupId, groupId));
 
-  return { ...group, members };
+  return { 
+    ...group, 
+    members: members.filter(m => m.status === 'approved' || (m.status === 'invited' && group.adminId === userId)) 
+  };
 };
 
 // ── UPDATE GROUP ──
@@ -136,15 +141,33 @@ export const inviteMember = async (
     )
     .limit(1);
 
-  if (existing) throw new AppError("User is already a member", 409);
+  if (existing) {
+    if (existing.status === 'approved') throw new AppError("User is already a member", 409);
+    if (existing.status === 'pending') throw new AppError("User already requested to join", 409);
+    if (existing.status === 'invited') throw new AppError("User already has a pending invite", 409);
+  }
 
+  // Add as invited — they must accept the invite
   await db.insert(groupMembers).values({
     groupId,
     userId: invitedUser.id,
     role: "member",
+    status: "invited",
   });
 
-  return { message: `${invitedUser.name} added to the group` };
+  // Get inviting admin's name
+  const [admin] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+
+  // Send invitation notification to the invited user
+  await db.insert(notifications).values({
+    userId: invitedUser.id,
+    type: "group",
+    title: "Group Invitation",
+    body: `${admin?.name ?? "An admin"} invited you to join "${group.name}".`,
+    linkTo: `/groups/${groupId}`,
+  });
+
+  return { message: `Invitation sent to ${invitedUser.name}` };
 };
 
 // ── REMOVE MEMBER ──
@@ -240,4 +263,188 @@ export const deleteGroup = async (groupId: string, userId: string) => {
   await db.delete(groups).where(eq(groups.id, groupId));
 
   return { message: "Group deleted successfully" };
+};
+
+// ── ACCEPT INVITE ──
+export const acceptInvite = async (groupId: string, userId: string) => {
+  const [pending] = await db
+    .select()
+    .from(groupMembers)
+    .where(
+      and(
+        eq(groupMembers.groupId, groupId),
+        eq(groupMembers.userId, userId),
+        eq(groupMembers.status, "invited"),
+      ),
+    )
+    .limit(1);
+
+  if (!pending) throw new AppError("No pending invite found", 404);
+
+  await db
+    .update(groupMembers)
+    .set({ status: "approved" })
+    .where(
+      and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, userId)),
+    );
+
+  const [group] = await db
+    .select()
+    .from(groups)
+    .where(eq(groups.id, groupId))
+    .limit(1);
+
+  const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+
+  // Notify admin that the invite was accepted
+  if (group && user) {
+    await db.insert(notifications).values({
+      userId: group.adminId,
+      type: "group",
+      title: "Invite Accepted",
+      body: `${user.name} accepted your invitation to join "${group.name}".`,
+      linkTo: `/groups/${groupId}`,
+    });
+  }
+
+  return { message: "You have joined the group!", groupId };
+};
+
+// ── DECLINE INVITE ──
+export const declineInvite = async (groupId: string, userId: string) => {
+  const [pending] = await db
+    .select()
+    .from(groupMembers)
+    .where(
+      and(
+        eq(groupMembers.groupId, groupId),
+        eq(groupMembers.userId, userId),
+        eq(groupMembers.status, "invited"),
+      ),
+    )
+    .limit(1);
+
+  if (!pending) throw new AppError("No pending invite found", 404);
+
+  await db
+    .delete(groupMembers)
+    .where(
+      and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, userId)),
+    );
+
+  return { message: "Invitation declined" };
+};
+
+// ── GET JOIN REQUESTS ──
+export const getJoinRequests = async (groupId: string, userId: string) => {
+  const [group] = await db
+    .select()
+    .from(groups)
+    .where(eq(groups.id, groupId))
+    .limit(1);
+
+  if (!group) throw new AppError("Group not found", 404);
+  if (group.adminId !== userId)
+    throw new AppError("Only the admin can view join requests", 403);
+
+  const requests = await db
+    .select({
+      id: users.id,
+      name: users.name,
+      email: users.email,
+      avatar: users.avatar,
+      requestedAt: groupMembers.joinedAt,
+    })
+    .from(groupMembers)
+    .innerJoin(users, eq(groupMembers.userId, users.id))
+    .where(
+      and(
+        eq(groupMembers.groupId, groupId),
+        eq(groupMembers.status, "pending")
+      ),
+    );
+
+  return requests;
+};
+
+// ── APPROVE JOIN REQUEST ──
+export const approveJoinRequest = async (
+  groupId: string,
+  adminId: string,
+  requesterId: string,
+) => {
+  const [group] = await db
+    .select()
+    .from(groups)
+    .where(eq(groups.id, groupId))
+    .limit(1);
+
+  if (!group) throw new AppError("Group not found", 404);
+  if (group.adminId !== adminId)
+    throw new AppError("Only the admin can approve requests", 403);
+
+  const [updated] = await db
+    .update(groupMembers)
+    .set({ status: "approved" })
+    .where(
+      and(
+        eq(groupMembers.groupId, groupId),
+        eq(groupMembers.userId, requesterId),
+        eq(groupMembers.status, "pending")
+      ),
+    )
+    .returning();
+
+  if (!updated) throw new AppError("Join request not found", 404);
+
+  // Send notification to the user
+  await db.insert(notifications).values({
+    userId: requesterId,
+    type: "group",
+    title: "Join Request Approved",
+    body: `Your request to join "${group.name}" has been approved!`,
+    linkTo: `/groups/${groupId}`,
+  });
+
+  return { message: "Join request approved" };
+};
+
+// ── REJECT JOIN REQUEST ──
+export const rejectJoinRequest = async (
+  groupId: string,
+  adminId: string,
+  requesterId: string,
+) => {
+  const [group] = await db
+    .select()
+    .from(groups)
+    .where(eq(groups.id, groupId))
+    .limit(1);
+
+  if (!group) throw new AppError("Group not found", 404);
+  if (group.adminId !== adminId)
+    throw new AppError("Only the admin can reject requests", 403);
+
+  const [deleted] = await db
+    .delete(groupMembers)
+    .where(
+      and(
+        eq(groupMembers.groupId, groupId),
+        eq(groupMembers.userId, requesterId),
+        eq(groupMembers.status, "pending")
+      ),
+    )
+    .returning();
+
+  if (!deleted) throw new AppError("Join request not found", 404);
+
+  // Optional: Send rejection notification
+  await db.insert(notifications).values({
+    userId: requesterId,
+    type: "system",
+    title: "Join Request Declined",
+    body: `Your request to join "${group.name}" was declined.`,
+  });
+
+  return { message: "Join request rejected" };
 };
