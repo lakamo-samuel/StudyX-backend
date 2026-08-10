@@ -1,0 +1,2 @@
+CREATE TYPE "public"."member_status" AS ENUM('pending', 'approved', 'rejected', 'invited');--> statement-breakpoint
+ALTER TABLE "group_members" ADD COLUMN "status" "member_status" DEFAULT 'approved' NOT NULL;

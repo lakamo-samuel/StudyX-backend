@@ -22,6 +22,13 @@
       "when": 1783818443505,
       "tag": "0002_real_king_bedlam",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786328644149,
+      "tag": "0003_huge_scarlet_spider",
+      "breakpoints": true
     }
   ]
 }
