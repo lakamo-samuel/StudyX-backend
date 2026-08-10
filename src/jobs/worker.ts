@@ -10,12 +10,15 @@ import { handleSessionAutoEnd } from "./handlers/session.autoend";
 // BullMQ bundles its own ioredis — parse URL into plain connection options
 function parseRedisUrl(url: string) {
   const parsed = new URL(url);
+  const isTls = parsed.protocol === "rediss:";
   return {
     host: parsed.hostname,
-    port: parseInt(parsed.port || "6379"),
+    port: parseInt(parsed.port || (isTls ? "6380" : "6379")),
     password: parsed.password || undefined,
     db: parseInt(parsed.pathname.slice(1) || "0"),
     maxRetriesPerRequest: null as null,
+    // Required for Upstash and other TLS Redis providers (rediss://)
+    tls: isTls ? {} : undefined,
   };
 }
 
