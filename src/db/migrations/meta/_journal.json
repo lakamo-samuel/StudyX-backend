@@ -29,6 +29,13 @@
       "when": 1786328644149,
       "tag": "0003_huge_scarlet_spider",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786419855886,
+      "tag": "0004_aberrant_giant_man",
+      "breakpoints": true
     }
   ]
 }

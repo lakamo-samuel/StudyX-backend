@@ -1,5 +1,5 @@
 import { db } from "../../config/db";
-import { sessions, sessionAgenda } from "../../db/schema/sessions";
+import { sessions, sessionAgenda, sessionParticipants } from "../../db/schema/sessions";
 import { groupMembers } from "../../db/schema/groups";
 import { quizzes, quizQuestions, quizAnswers } from "../../db/schema/quizzes";
 import { eq, and, count } from "drizzle-orm";
@@ -49,16 +49,22 @@ export const handleAiSessionSummary = async (job: {
       }
     }
 
-    // Build all context in parallel
-    const [groupCtx, transcript, toolkitContext, memberResult, agendaItems] =
+    // Build all context in parallel — session_participants may not exist yet if migration is pending
+    let participantRowsData: { userId: string; joinedAt: Date; leftAt: Date | null }[] = []
+    try {
+      participantRowsData = await db
+        .select()
+        .from(sessionParticipants)
+        .where(eq(sessionParticipants.sessionId, sessionId));
+    } catch {
+      // migration not yet run — fall through to group member count
+    }
+
+    const [groupCtx, transcript, toolkitContext, agendaItems] =
       await Promise.all([
         buildGroupContext(groupId),
         buildSessionTranscript(sessionId, 300),
         buildToolkitContext(groupId),
-        db
-          .select({ count: count() })
-          .from(groupMembers)
-          .where(and(eq(groupMembers.groupId, groupId))),
         db
           .select()
           .from(sessionAgenda)
@@ -66,7 +72,24 @@ export const handleAiSessionSummary = async (job: {
           .orderBy(sessionAgenda.order),
       ]);
 
-    const memberCount = Number(memberResult[0]?.count ?? 0);
+    const participantRows = participantRowsData;
+
+    const joinedCount = participantRows.length;
+    const stayedCount = participantRows.filter((p) => p.leftAt === null).length;
+
+    // Fallback to group member count for sessions without presence tracking
+    let memberCount = joinedCount;
+    if (joinedCount === 0) {
+      const [result] = await db
+        .select({ count: count() })
+        .from(groupMembers)
+        .where(and(eq(groupMembers.groupId, groupId)));
+      memberCount = Number(result?.count ?? 0);
+    }
+
+    const participantSummary = joinedCount > 0
+      ? `${joinedCount} joined, ${stayedCount} stayed until the end`
+      : `${memberCount} group members`;
     const hasTranscript = transcript.text.trim().length > 0;
 
     // Fetch quiz performance for context
@@ -142,7 +165,7 @@ ${groupCtx.contextString}
 Session: "${session.title}"
 Goal: "${session.goal ?? "Study effectively"}"
 Duration: ${durationStr}
-Participants: ${memberCount} students
+Participants: ${participantSummary}
 
 Agenda covered:
 ${agendaText}

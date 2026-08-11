@@ -50,7 +50,21 @@ export const sessionAgenda = pgTable("session_agenda", {
   order: integer("order").default(0).notNull(),
 });
 
+export const sessionParticipants = pgTable("session_participants", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sessionId: uuid("session_id")
+    .references(() => sessions.id, { onDelete: "cascade" })
+    .notNull(),
+  userId: uuid("user_id")
+    .references(() => users.id, { onDelete: "cascade" })
+    .notNull(),
+  joinedAt: timestamp("joined_at").defaultNow().notNull(),
+  /** null = still present or session ended before they left */
+  leftAt: timestamp("left_at"),
+});
+
 export type Session = typeof sessions.$inferSelect;
 export type NewSession = typeof sessions.$inferInsert;
 export type SessionAgenda = typeof sessionAgenda.$inferSelect;
 export type NewSessionAgenda = typeof sessionAgenda.$inferInsert;
+export type SessionParticipant = typeof sessionParticipants.$inferSelect;

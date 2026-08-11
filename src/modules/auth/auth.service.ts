@@ -10,7 +10,7 @@ import {
 } from "./auth.schema";
 import { AppError } from "../../middleware/error.middleware";
 import crypto from "crypto";
-
+import emailTemplate from "../../utils/mail";
 import bcrypt from "bcryptjs";
 import { redis } from "../../config/redis";
 import { sendEmail } from "../../lib/email";
@@ -55,12 +55,7 @@ export const register = async (input: RegisterInput) => {
     await sendEmail({
       to: user.email,
       subject: 'Verify your Vyrdly account',
-      html: `
-        <h2>Welcome to Vyrdly, ${user.name}!</h2>
-        <p>Your verification code is:</p>
-        <h1 style="letter-spacing: 8px;">${otp}</h1>
-        <p>This code expires in 10 minutes.</p>
-      `,
+      html: emailTemplate({ firstName: user.name.split(' ')[0], code: otp })
     })
   } catch (emailErr) {
     console.warn('⚠️ Email not sent — check Resend config. OTP logged to console.')

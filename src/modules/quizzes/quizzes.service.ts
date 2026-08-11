@@ -2,7 +2,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { db } from "../../config/db";
 import { quizzes, quizQuestions, quizAnswers } from "../../db/schema/quizzes";
 import { groupMembers } from "../../db/schema/groups";
-import { sessions } from "../../db/schema/sessions";
+import { sessions, sessionParticipants } from "../../db/schema/sessions";
 import { users } from "../../db/schema/users";
 import { AppError } from "../../middleware/error.middleware";
 import type { CreateQuizInput, SubmitAnswerInput } from "./quizzes.schema";
@@ -267,17 +267,36 @@ export const getSessionDebrief = async (sessionId: string, userId: string) => {
     }
   }
 
-  const { groupMembers } = await import("../../db/schema/groups");
-  const members = await db
-    .select({ id: groupMembers.id })
-    .from(groupMembers)
-    .where(eq(groupMembers.groupId, session.groupId));
-  const participantCount = members.length;
+  // ── Participant tracking from session_participants table ──
+  let participantRows: { userId: string; joinedAt: Date; leftAt: Date | null }[] = []
+  try {
+    participantRows = await db
+      .select({
+        userId: sessionParticipants.userId,
+        joinedAt: sessionParticipants.joinedAt,
+        leftAt: sessionParticipants.leftAt,
+      })
+      .from(sessionParticipants)
+      .where(eq(sessionParticipants.sessionId, sessionId));
+  } catch {
+    // table may not exist yet — fall through to group member count fallback
+  }
+
+  // joined = everyone who joined; stayed = those whose leftAt is null
+  // (null leftAt means they were still present when session ended)
+  const joinedCount = participantRows.length;
+  const stayedCount = participantRows.filter((p) => p.leftAt === null).length;
+
+  // Only show participant count if we have real presence data.
+  // For older sessions without tracking, show null so the frontend shows '—' instead of misleading group size.
+  const participantCount = joinedCount > 0 ? joinedCount.toString() : null;
 
   const enrichedSession = {
     ...session,
     duration: durationStr,
-    participantCount: participantCount.toString(),
+    participantCount,
+    joinedCount: joinedCount > 0 ? joinedCount : null,
+    stayedCount: joinedCount > 0 ? stayedCount : null,
   };
 
   if (!quiz) {
