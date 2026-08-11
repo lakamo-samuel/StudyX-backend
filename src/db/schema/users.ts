@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, integer, text, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, integer, text, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -10,6 +10,7 @@ export const users = pgTable("users", {
   year: integer("year"),
   avatar: text("avatar"),
   streak: integer("streak").default(0),
+  isVerified: boolean("is_verified").default(false).notNull(),
   // Onboarding fields — persisted from step 2 and step 3
   goals: jsonb("goals").$type<string[]>().default([]),
   availability: jsonb("availability").$type<string[]>().default([]),

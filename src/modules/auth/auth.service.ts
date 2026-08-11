@@ -83,6 +83,12 @@ export const verifyOtp = async (input: VerifyOtpInput) => {
 
   await redis.del(`otp:${input.email}`);
 
+  // Mark the account as verified
+  await db
+    .update(users)
+    .set({ isVerified: true, updatedAt: new Date() })
+    .where(eq(users.email, input.email));
+
   const token = signToken({ userId: user.id, email: user.email });
 
   return {
@@ -116,6 +122,28 @@ export const login = async (input: LoginInput) => {
 
   if (!isMatch) {
     throw new AppError("Invalid email or password", 401);
+  }
+
+  if (!user.isVerified) {
+    // Re-send OTP so they can complete verification
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    await redis.set(`otp:${user.email}`, otp, 'EX', 60 * 10);
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`🔑 OTP for ${user.email}: ${otp}`);
+    }
+
+    try {
+      await sendEmail({
+        to: user.email,
+        subject: 'Verify your Vyrdly account',
+        html: emailTemplate({ firstName: user.name.split(' ')[0], code: otp })
+      });
+    } catch {
+      console.warn('⚠️ Email not sent — OTP logged to console.');
+    }
+
+    throw new AppError("Email not verified. A new verification code has been sent to your email.", 403);
   }
 
   const token = signToken({ userId: user.id, email: user.email });
