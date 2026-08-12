@@ -9,6 +9,9 @@ import { env } from "../config/env";
 
 const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
 
+// ── Active model — update here to change for all uses ──
+const GEMINI_MODEL = "gemini-3.5-flash-lite";
+
 // ────────────────────────────────────────────────────────
 //  SHARED SAFETY SETTINGS
 // ────────────────────────────────────────────────────────
@@ -37,7 +40,7 @@ const safetySettings = [
 //  — Has a hard system instruction and capped output tokens
 // ────────────────────────────────────────────────────────
 export const chatModel = genAI.getGenerativeModel({
-  model: "gemini-2.5-flash",
+  model: GEMINI_MODEL,
   systemInstruction: `
 You are "Vryd AI", an intelligent academic study assistant embedded inside Vyrdly, a group study platform.
 You help university students with anything academic — whether it's from their uploaded session materials or any educational topic they need help with.
@@ -90,7 +93,7 @@ RULES:
 //  — Low temperature for deterministic JSON, forced mime type
 // ────────────────────────────────────────────────────────
 export const structuredModel = genAI.getGenerativeModel({
-  model: "gemini-2.5-flash",
+  model: GEMINI_MODEL,
   generationConfig: {
     maxOutputTokens: 2048,
     temperature: 0.3,
@@ -104,7 +107,7 @@ export const structuredModel = genAI.getGenerativeModel({
 //  LEGACY PLAIN MODEL (kept for backward compat — prefer chatModel)
 // ────────────────────────────────────────────────────────
 const model = genAI.getGenerativeModel({
-  model: "gemini-2.5-flash",
+  model: GEMINI_MODEL,
   generationConfig: { maxOutputTokens: 2048 },
   safetySettings,
 });
@@ -139,7 +142,7 @@ export const generateJsonFromParts = async (parts: Part[]): Promise<string> => {
   try {
     const genAIInstance = new GoogleGenerativeAI(env.GEMINI_API_KEY);
     const multimodalStructuredModel = genAIInstance.getGenerativeModel({
-      model: "gemini-2.5-flash",
+      model: GEMINI_MODEL,
       generationConfig: {
         maxOutputTokens: 4096,
         temperature: 0.3,
@@ -210,7 +213,7 @@ RULES:
 
   try {
     const sessionChatModel = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
+      model: GEMINI_MODEL,
       systemInstruction,
       generationConfig: {
         maxOutputTokens: 800,

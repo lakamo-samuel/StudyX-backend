@@ -4,9 +4,9 @@ import { sessions, sessionAgenda } from "../../db/schema/sessions";
 import { groupMembers } from "../../db/schema/groups";
 import { messages } from "../../db/schema/messages";
 import { AppError } from "../../middleware/error.middleware";
-import { generateChatContent, generateSessionChat } from "../../lib/gemini";
+import { generateSessionChat } from "../../lib/gemini";
 import { buildGroupContext, buildToolkitContext } from "../../lib/ai-context";
-import { aiQueue } from "../../jobs/queue";
+import { aiQueue, sessionQueue } from "../../jobs/queue";
 import type {
   CreateSessionInput,
   UpdateSessionInput,
@@ -40,6 +40,31 @@ const assertSessionAccess = async (sessionId: string, userId: string) => {
   return session;
 };
 
+// ── helper: schedule session reminder job at the session's scheduled time ──
+const scheduleReminder = async (sessionId: string, scheduledDate?: string | null, scheduledTime?: string | null) => {
+  if (!scheduledDate || !scheduledTime) return;
+
+  const sessionDateTime = new Date(`${scheduledDate}T${scheduledTime}:00`);
+  const now = new Date();
+  const delay = sessionDateTime.getTime() - now.getTime();
+
+  if (delay <= 0) return; // already in the past — don't schedule
+
+  // Use a stable jobId so re-scheduling (on edit) replaces the old job
+  await sessionQueue.add(
+    "session-reminder",
+    { sessionId },
+    {
+      delay,
+      jobId: `reminder-${sessionId}`,
+      removeOnComplete: true,
+      removeOnFail: true,
+    },
+  );
+
+  console.log(`⏰ Reminder scheduled for session ${sessionId} in ${Math.round(delay / 60000)} min`);
+};
+
 // ── CREATE SESSION ──
 export const createSession = async (
   userId: string,
@@ -59,6 +84,9 @@ export const createSession = async (
       createdBy: userId,
     })
     .returning();
+
+  // Schedule reminder job if date+time are provided
+  await scheduleReminder(session.id, session.scheduledDate, session.scheduledTime);
 
   return session;
 };
@@ -128,6 +156,9 @@ export const updateSession = async (
     .set({ ...input, updatedAt: new Date() })
     .where(eq(sessions.id, sessionId))
     .returning();
+
+  // Re-schedule reminder if date/time changed
+  await scheduleReminder(updated.id, updated.scheduledDate, updated.scheduledTime);
 
   return updated;
 };

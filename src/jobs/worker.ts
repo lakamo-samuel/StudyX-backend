@@ -6,6 +6,7 @@ import { handleAiQuiz } from "./handlers/ai.quiz";
 import { handleAiAgenda } from "./handlers/ai.agenda";
 import { handleAiSessionSummary } from "./handlers/ai.session-summary";
 import { handleSessionAutoEnd } from "./handlers/session.autoend";
+import { handleSessionReminder } from "./handlers/session.reminder";
 
 // BullMQ bundles its own ioredis — parse URL into plain connection options
 function parseRedisUrl(url: string) {
@@ -49,6 +50,8 @@ const sessionWorker = new Worker(
     switch (job.name) {
       case "auto-end-session":
         return handleSessionAutoEnd(job as any);
+      case "session-reminder":
+        return handleSessionReminder(job as any);
       default:
         console.warn(`Unknown session job: ${job.name}`);
     }

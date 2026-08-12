@@ -204,6 +204,19 @@ CRITICAL: The sum of all durationMinutes values MUST equal exactly ${duration}.
       `❌ Failed to generate agenda for session ${sessionId}:`,
       err,
     );
+
+    // Notify clients so the UI can show an error instead of spinning forever
+    const io = getIo();
+    if (io) {
+      const isRateLimit = (err as { status?: number })?.status === 429;
+      io.to(sessionId).emit("agenda:error", {
+        sessionId,
+        message: isRateLimit
+          ? "AI quota reached — please try again in a few minutes."
+          : "Agenda generation failed. Please try again.",
+      });
+    }
+
     throw err;
   }
 };
