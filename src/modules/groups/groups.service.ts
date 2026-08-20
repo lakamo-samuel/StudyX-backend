@@ -3,6 +3,7 @@ import { db } from "../../config/db";
 import { groups, groupMembers } from "../../db/schema/groups";
 import { users } from "../../db/schema/users";
 import { notifications } from "../../db/schema/notifications";
+import { assertMemberCapForGroup } from "../billing/entitlements";
 import { AppError } from "../../middleware/error.middleware";
 import type {
   CreateGroupInput,
@@ -147,6 +148,8 @@ export const inviteMember = async (
     if (existing.status === 'invited') throw new AppError("User already has a pending invite", 409);
   }
 
+  await assertMemberCapForGroup(groupId);
+
   // Add as invited — they must accept the invite
   await db.insert(groupMembers).values({
     groupId,
@@ -281,6 +284,8 @@ export const acceptInvite = async (groupId: string, userId: string) => {
 
   if (!pending) throw new AppError("No pending invite found", 404);
 
+  await assertMemberCapForGroup(groupId);
+
   await db
     .update(groupMembers)
     .set({ status: "approved" })
@@ -383,6 +388,8 @@ export const approveJoinRequest = async (
   if (group.adminId !== adminId)
     throw new AppError("Only the admin can approve requests", 403);
 
+  await assertMemberCapForGroup(groupId);
+
   const [updated] = await db
     .update(groupMembers)
     .set({ status: "approved" })
@@ -447,4 +454,87 @@ export const rejectJoinRequest = async (
   });
 
   return { message: "Join request rejected" };
+};
+
+// ── SCHEDULE SUGGESTIONS (no-cost overlap from availability) ──
+export const getScheduleSuggestions = async (groupId: string, userId: string) => {
+  const [member] = await db
+    .select()
+    .from(groupMembers)
+    .where(
+      and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, userId)),
+    )
+    .limit(1);
+
+  if (!member) throw new AppError("Group not found or access denied", 404);
+
+  const members = await db
+    .select({
+      id: users.id,
+      name: users.name,
+      availability: users.availability,
+      status: groupMembers.status,
+    })
+    .from(groupMembers)
+    .innerJoin(users, eq(groupMembers.userId, users.id))
+    .where(
+      and(eq(groupMembers.groupId, groupId), eq(groupMembers.status, "approved")),
+    );
+
+  const totalMembers = members.length;
+  if (totalMembers === 0) {
+    return {
+      groupId,
+      totalMembers: 0,
+      suggestions: [],
+      message: "No approved members found yet.",
+    };
+  }
+
+  const slotCounts = new Map<
+    string,
+    { slot: string; members: string[]; memberIds: string[] }
+  >();
+
+  for (const m of members) {
+    const slots = Array.isArray(m.availability) ? m.availability : [];
+
+    for (const rawSlot of slots) {
+      const slot = String(rawSlot || "").trim();
+      if (!slot) continue;
+
+      const current = slotCounts.get(slot);
+      if (current) {
+        current.members.push(m.name);
+        current.memberIds.push(m.id);
+      } else {
+        slotCounts.set(slot, {
+          slot,
+          members: [m.name],
+          memberIds: [m.id],
+        });
+      }
+    }
+  }
+
+  const suggestions = [...slotCounts.values()]
+    .map((entry) => ({
+      slot: entry.slot,
+      overlapCount: entry.members.length,
+      overlapRatio: Number((entry.members.length / totalMembers).toFixed(2)),
+      members: entry.members,
+      memberIds: entry.memberIds,
+    }))
+    .sort((a, b) => b.overlapCount - a.overlapCount)
+    .slice(0, 10);
+
+  return {
+    groupId,
+    totalMembers,
+    suggestions,
+    message:
+      suggestions.length > 0
+        ? "Top overlap suggestions generated from member availability."
+        : "No shared availability data found yet. Ask members to update onboarding availability.",
+  };
 };

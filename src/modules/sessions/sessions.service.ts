@@ -7,6 +7,7 @@ import { AppError } from "../../middleware/error.middleware";
 import { generateSessionChat } from "../../lib/gemini";
 import { buildGroupContext, buildToolkitContext } from "../../lib/ai-context";
 import { aiQueue, sessionQueue } from "../../jobs/queue";
+import { assertQuizQuestionLimitForGroup } from "../billing/entitlements";
 import type {
   CreateSessionInput,
   UpdateSessionInput,
@@ -111,19 +112,25 @@ export const getSessionsByGroup = async (groupId: string, userId: string) => {
 // ── GET ALL USER SESSIONS (across all groups) ── fixed N+1
 export const getAllUserSessions = async (userId: string) => {
   const memberships = await db
-    .select({ groupId: groupMembers.groupId })
+    .select({ groupId: groupMembers.groupId, joinedAt: groupMembers.joinedAt, status: groupMembers.status })
     .from(groupMembers)
-    .where(eq(groupMembers.userId, userId));
+    .where(and(eq(groupMembers.userId, userId), eq(groupMembers.status, "approved")));
 
-  const groupIds = memberships.map((m) => m.groupId);
-  if (groupIds.length === 0) return [];
+  if (memberships.length === 0) return [];
 
-  // single query with inArray instead of N parallel queries
-  return db
+  // Get sessions from approved groups, but only sessions created after user joined
+  const sessionsList = await db
     .select()
     .from(sessions)
-    .where(inArray(sessions.groupId, groupIds))
+    .where(inArray(sessions.groupId, memberships.map((m) => m.groupId)))
     .orderBy(desc(sessions.createdAt));
+
+  // Filter sessions to only show those created after user joined their respective group
+  const membershipMap = new Map(memberships.map((m) => [m.groupId, m.joinedAt]));
+  return sessionsList.filter((s) => {
+    const joinedAt = membershipMap.get(s.groupId);
+    return joinedAt && s.createdAt >= joinedAt;
+  });
 };
 
 // ── GET SINGLE SESSION ──
@@ -305,6 +312,8 @@ export const generateQuiz = async (
   questionCount: number = 5,
 ) => {
   const session = await assertSessionAccess(sessionId, userId);
+
+  await assertQuizQuestionLimitForGroup(session.groupId, questionCount);
 
   await aiQueue.add(
     "generate-quiz",

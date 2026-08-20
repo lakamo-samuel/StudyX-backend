@@ -14,6 +14,7 @@ export const users = pgTable("users", {
   // Onboarding fields — persisted from step 2 and step 3
   goals: jsonb("goals").$type<string[]>().default([]),
   availability: jsonb("availability").$type<string[]>().default([]),
+  onboardingCompleted: boolean("onboarding_completed").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

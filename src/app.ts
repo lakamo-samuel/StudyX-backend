@@ -15,6 +15,7 @@ import notificationsRoutes from "./modules/notifications/notifications.routes";
 import toolkitRoutes from "./modules/toolkit/toolkit.routes";
 import quizzesRoutes from "./modules/quizzes/quizzes.routes";
 import discoverRoutes from "./modules/discover/discover.routes";
+import billingRoutes from "./modules/billing/billing.routes";
 import {
     logger
     
@@ -22,9 +23,11 @@ import {
  import pinoHttp from 'pino-http'
 const app = express()
 
+// Trust the first proxy hop (required when behind localtunnel, ngrok, nginx, etc.)
+// This lets express-rate-limit and req.ip work correctly with X-Forwarded-For
+app.set('trust proxy', 1)
 
 //Security
-
 app.use(helmet());
 app.use(cors({
     origin: env.CLIENT_URL,
@@ -32,13 +35,18 @@ app.use(cors({
 }))
 app.use(pinoHttp({
     logger,
-    autoLogging: process.env.NODE_ENV === 'production' 
+    autoLogging: process.env.NODE_ENV === 'production'
 }))
-//rate limiter
+
+// Webhook route MUST be registered before the rate limiter and body parser
+// so Flutterwave's POST is never blocked or interfered with
+import { flutterwaveWebhookController } from './modules/billing/billing.controller'
+app.post('/api/billing/webhooks/flutterwave', express.json(), flutterwaveWebhookController)
+
+// Rate limiter for all other routes
 app.use(generalRateLimit)
 
-//Body parsing
-
+// Body parsing
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }))
 
@@ -58,6 +66,7 @@ app.use("/api/quizzes", quizzesRoutes);
 app.use("/api/messages", messagesRoutes);
 app.use("/api/notifications", notificationsRoutes);
 app.use('/api/discover', discoverRoutes)
+app.use('/api/billing', billingRoutes)
 
 
 // error handler

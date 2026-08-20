@@ -4,6 +4,7 @@ import { groups, groupMembers } from "../../db/schema/groups";
 import { sessions } from "../../db/schema/sessions";
 import { users } from "../../db/schema/users";
 import { notifications } from "../../db/schema/notifications";
+import { assertMemberCapForGroup } from "../billing/entitlements";
 
 // ── SEARCH PUBLIC GROUPS ──
 export const searchGroups = async (
@@ -128,6 +129,8 @@ export const joinPublicGroup = async (groupId: string, userId: string) => {
     const { AppError } = await import("../../middleware/error.middleware");
     throw new AppError("You are already a member of this group", 409);
   }
+
+  await assertMemberCapForGroup(groupId);
 
   await db.insert(groupMembers).values({
     groupId,

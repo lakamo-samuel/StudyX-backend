@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   registerController,
   verifyOtpController,
+  resendOtpController,
   loginController,
   forgotPasswordController,
   resetPasswordController,
@@ -11,6 +12,7 @@ import { authRateLimit } from "../../middleware/rateLimit.middleware";
 import {
   registerSchema,
   verifyOtpSchema,
+  resendOtpSchema,
   loginSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
@@ -29,6 +31,12 @@ router.post(
   authRateLimit,
   validate(verifyOtpSchema),
   verifyOtpController,
+);
+router.post(
+  "/resend-otp",
+  authRateLimit,
+  validate(resendOtpSchema),
+  resendOtpController,
 );
 router.post("/login", authRateLimit, validate(loginSchema), loginController);
 router.post(

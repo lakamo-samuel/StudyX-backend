@@ -5,6 +5,7 @@ import {
   ForgotPasswordInput,
   LoginInput,
   RegisterInput,
+  ResendOtpInput,
   ResetPasswordInput,
   VerifyOtpInput,
 } from "./auth.schema";
@@ -104,6 +105,41 @@ export const verifyOtp = async (input: VerifyOtpInput) => {
       streak: user.streak,
     },
   };
+};
+
+export const resendOtp = async (input: ResendOtpInput) => {
+  const [user] = await db
+    .select()
+    .from(users)
+    .where(eq(users.email, input.email))
+    .limit(1);
+
+  if (!user) {
+    throw new AppError("User not found", 404);
+  }
+
+  if (user.isVerified) {
+    return { message: "This email is already verified." };
+  }
+
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  await redis.set(`otp:${user.email}`, otp, "EX", 60 * 10);
+
+  if (process.env.NODE_ENV === "development") {
+    console.log(`🔑 OTP for ${user.email}: ${otp}`);
+  }
+
+  try {
+    await sendEmail({
+      to: user.email,
+      subject: "Verify your Vyrdly account",
+      html: emailTemplate({ firstName: user.name.split(" ")[0], code: otp }),
+    });
+  } catch {
+    console.warn("⚠️ Email not sent — check Resend config. OTP logged to console.");
+  }
+
+  return { message: "A new verification code has been sent." };
 };
 
 // Login

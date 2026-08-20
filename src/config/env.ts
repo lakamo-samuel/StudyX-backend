@@ -29,6 +29,9 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().min(1, "RESEND_API_KEY is required").optional(),
   EMAIL_FROM: z.string().email("EMAIL_FROM must be a valid email").optional(),
 
+  // Billing (Flutterwave)
+  FLUTTERWAVE_SECRET_KEY: z.string().min(1, "FLUTTERWAVE_SECRET_KEY is required").optional(),
+
   // Client
   CLIENT_URL: z.string().url("CLIENT_URL must be a valid URL"),
 });

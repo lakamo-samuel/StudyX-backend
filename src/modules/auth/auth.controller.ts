@@ -5,6 +5,7 @@ import type {
   LoginInput,
   ForgotPasswordInput,
   ResetPasswordInput,
+  ResendOtpInput,
   VerifyOtpInput,
 } from "./auth.schema";
 
@@ -28,6 +29,19 @@ export const verifyOtpController = async (
 ): Promise<void> => {
   try {
     const result = await authService.verifyOtp(req.body);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const resendOtpController = async (
+  req: Request<{}, {}, ResendOtpInput>,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const result = await authService.resendOtp(req.body);
     res.status(200).json(result);
   } catch (err) {
     next(err);

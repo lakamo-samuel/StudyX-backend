@@ -235,3 +235,19 @@ export const rejectJoinRequestController = async (
     next(err);
   }
 };
+
+export const getScheduleSuggestionsController = async (
+  req: Request<{ groupId: string }>,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const result = await groupsService.getScheduleSuggestions(
+      req.params.groupId,
+      req.user!.userId,
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};

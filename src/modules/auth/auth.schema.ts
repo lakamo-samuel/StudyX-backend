@@ -28,8 +28,13 @@ export const verifyOtpSchema = z.object({
   otp: z.string().length(6, "OTP must be 6 digits"),
 });
 
+export const resendOtpSchema = z.object({
+  email: z.string().email("Invalid email address"),
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 export type VerifyOtpInput = z.infer<typeof verifyOtpSchema>;
+export type ResendOtpInput = z.infer<typeof resendOtpSchema>;

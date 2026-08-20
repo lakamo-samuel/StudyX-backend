@@ -7,6 +7,7 @@ import cloudinary from "../../config/cloudinary";
 import { env } from "../../config/env";
 import type { SaveFileInput, UpdateFileInput } from "./toolkit.schema";
 import { aiQueue } from "../../jobs/queue";
+import { assertToolkitSummaryQuotaForGroup } from "../billing/entitlements";
 
 
 // ── helper: assert group member ──
@@ -49,6 +50,7 @@ export const getUploadSignature = async (groupId: string, userId: string) => {
 
 export const saveFile = async (userId: string, input: SaveFileInput) => {
   await assertGroupMember(input.groupId, userId);
+  await assertToolkitSummaryQuotaForGroup(input.groupId);
 
   const [file] = await db
     .insert(files)
@@ -167,6 +169,7 @@ export const regenerateSummary = async (fileId: string, userId: string) => {
 
   if (!file) throw new AppError("File not found", 404);
   await assertGroupMember(file.groupId, userId);
+  await assertToolkitSummaryQuotaForGroup(file.groupId);
 
   // Set file back to processing state
   await db

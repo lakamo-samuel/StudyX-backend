@@ -5,43 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1780087317218,
-      "tag": "0000_living_iron_man",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1780088431692,
-      "tag": "0001_orange_wendigo",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1783818443505,
-      "tag": "0002_real_king_bedlam",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1786328644149,
-      "tag": "0003_huge_scarlet_spider",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1786419855886,
-      "tag": "0004_aberrant_giant_man",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1786485946506,
-      "tag": "0005_closed_madame_web",
+      "when": 1787101323972,
+      "tag": "0000_fresh_ulik",
       "breakpoints": true
     }
   ]
