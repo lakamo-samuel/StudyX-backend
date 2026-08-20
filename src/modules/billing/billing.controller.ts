@@ -34,13 +34,7 @@ export const flutterwaveWebhookController = async (
   next: NextFunction,
 ): Promise<void> => {
   try {
-    // Flutterwave sends the secret in the verif-hash header
     const signature = req.headers["verif-hash"] as string | undefined;
-
-    // Temporary: log the full payload so we can verify the structure
-    console.log("[webhook] verif-hash:", signature);
-    console.log("[webhook] body:", JSON.stringify(req.body, null, 2));
-
     const result = await billingService.handleWebhook(
       req.body as Record<string, unknown>,
       signature,

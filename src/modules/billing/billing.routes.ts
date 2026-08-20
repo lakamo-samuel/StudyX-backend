@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import { authenticate } from "../../middleware/auth.middleware";
 import { validate } from "../../middleware/validate.middleware";
 import {
@@ -20,8 +20,13 @@ router.post(
   initializeCheckoutController,
 );
 
-// Flutterwave sends a raw POST — no auth middleware
-router.post("/webhooks/flutterwave", flutterwaveWebhookController);
+// Flutterwave webhook — no auth, no rate limit, must receive raw JSON
+// express-rate-limit is applied globally in app.ts but we skip it here
+// by mounting this route before the rate-limiter would normally fire.
+// The route is registered on the billing router which is mounted at /api/billing,
+// making the full path: POST /api/billing/webhooks/flutterwave
+const skipRateLimit: RequestHandler = (_req, _res, next) => next()
+router.post("/webhooks/flutterwave", skipRateLimit, flutterwaveWebhookController);
 
 // Get billing details for a specific group (admin only)
 router.get("/groups/:groupId", authenticate, getGroupBillingController);
