@@ -31,6 +31,7 @@ const envSchema = z.object({
 
   // Billing (Flutterwave)
   FLUTTERWAVE_SECRET_KEY: z.string().min(1, "FLUTTERWAVE_SECRET_KEY is required").optional(),
+  FLUTTERWAVE_SECRET_HASH: z.string().min(1).optional(),
 
   // Client
   CLIENT_URL: z.string().url("CLIENT_URL must be a valid URL"),

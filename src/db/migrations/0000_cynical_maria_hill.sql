@@ -178,6 +178,7 @@ CREATE TABLE "users" (
 	"is_verified" boolean DEFAULT false NOT NULL,
 	"goals" jsonb DEFAULT '[]'::jsonb,
 	"availability" jsonb DEFAULT '[]'::jsonb,
+	"onboarding_completed" boolean DEFAULT false NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "users_email_unique" UNIQUE("email")

@@ -1,5 +1,5 @@
 {
-  "id": "3192f36b-5102-46b1-b377-326b7418a027",
+  "id": "20dd82fd-5bf8-4192-8b11-e5642deb06f0",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1360,6 +1360,13 @@
           "primaryKey": false,
           "notNull": false,
           "default": "'[]'::jsonb"
+        },
+        "onboarding_completed": {
+          "name": "onboarding_completed",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "created_at": {
           "name": "created_at",

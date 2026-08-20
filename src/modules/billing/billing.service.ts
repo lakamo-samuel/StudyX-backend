@@ -1,9 +1,9 @@
 import axios from "axios";
 import { and, desc, eq } from "drizzle-orm";
-import crypto from "crypto";
 import { env } from "../../config/env";
 import { db } from "../../config/db";
 import { groups, groupMembers } from "../../db/schema/groups";
+import { users } from "../../db/schema/users";
 import { transactions, subscriptions } from "../../db/schema/billing";
 import { AppError } from "../../middleware/error.middleware";
 import type { BillingCycleInput, BillingPlanInput, InitializeCheckoutInput } from "./billing.schema";
@@ -141,6 +141,16 @@ export const initializeCheckout = async (
     };
   }
 
+  // Fetch the initiating admin's real email for Flutterwave customer field
+  const [admin] = await db
+    .select({ email: users.email, name: users.name })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+
+  const customerEmail = admin?.email ?? `admin-${userId}@vyrdly.com`;
+  const customerName  = admin?.name  ?? group.name;
+
   const { data } = await axios.post(
     "https://api.flutterwave.com/v3/payments",
     {
@@ -149,17 +159,17 @@ export const initializeCheckout = async (
       currency: "NGN",
       redirect_url: `${env.CLIENT_URL}/settings?billing=success`,
       customer: {
-        email: `group-${group.id}@vyrdly.local`,
-        name: group.name,
+        email: customerEmail,
+        name:  customerName,
       },
       customizations: {
         title: "Vyrdly Subscription",
         description: `${input.plan} (${input.cycle}) plan for ${group.name}`,
       },
       meta: {
-        groupId: group.id,
-        targetPlan: input.plan,
-        cycle: input.cycle,
+        groupId:     group.id,
+        targetPlan:  input.plan,
+        cycle:       input.cycle,
         initiatedBy: userId,
       },
     },
@@ -175,53 +185,107 @@ export const initializeCheckout = async (
     provider: "flutterwave",
     mode: "live" as const,
     txRef,
-    amount,
+    amount,         // send as number to Flutterwave API
     currency: "NGN",
     checkoutUrl: data?.data?.link ?? null,
   };
 };
 
+const isUUID = (str: unknown): str is string =>
+  typeof str === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+
 export const handleWebhook = async (
   payload: Record<string, unknown>,
   rawSignature: string | undefined,
 ) => {
-  // Flutterwave sends the secret in the verif-hash header
-  if (!env.FLUTTERWAVE_SECRET_KEY || !rawSignature) {
-    throw new AppError("Webhook signature verification failed", 401);
-  }
+  const secretKey = env.FLUTTERWAVE_SECRET_KEY;
+  const secretHash = env.FLUTTERWAVE_SECRET_HASH;
 
-  if (rawSignature !== env.FLUTTERWAVE_SECRET_KEY) {
-    throw new AppError("Invalid webhook signature", 401);
+  // Flutterwave sends the secret in the verif-hash header (or custom configured Secret Hash)
+  if (secretKey || secretHash) {
+    if (!rawSignature) {
+      throw new AppError("Webhook signature header missing", 401);
+    }
+    const matchesKey = secretKey && rawSignature === secretKey;
+    const matchesHash = secretHash && rawSignature === secretHash;
+    if (!matchesKey && !matchesHash) {
+      throw new AppError("Invalid webhook signature", 401);
+    }
   }
 
   // Flutterwave payload structure:
   // { event: "charge.completed", data: { status, tx_ref, amount, currency, meta: { groupId, targetPlan, cycle, initiatedBy } } }
   const data = (payload.data ?? payload) as Record<string, unknown>;
-  const status = data.status as string;
-  const txRef  = (data.tx_ref ?? data.reference) as string | undefined;
-
-  // meta can be nested under data.meta or data.meta.metaData (Flutterwave v3)
-  const rawMeta = (data.meta ?? {}) as Record<string, unknown>;
-
-  // Extract meta fields — handle both flat and nested structures
-  const groupId    = (rawMeta.groupId ?? rawMeta.group_id) as string | undefined;
-  const targetPlan = (rawMeta.targetPlan ?? rawMeta.target_plan ?? "free") as BillingPlanInput;
-  const cycle      = (rawMeta.cycle ?? "monthly") as BillingCycleInput;
-  const initiatedBy = (rawMeta.initiatedBy ?? rawMeta.initiated_by ?? null) as string | null;
+  const rawStatus = (data.status ?? payload.status) as string | undefined;
+  const status = rawStatus ? rawStatus.toLowerCase() : "";
+  const txRef = (data.tx_ref ?? data.reference ?? payload.tx_ref ?? payload.reference) as string | undefined;
 
   if (!txRef) throw new AppError("Missing transaction reference", 400);
 
-  // groupId comes from meta — fall back to parsing tx_ref if meta is missing
-  // tx_ref format: vyrdly_<groupId>_<timestamp> where groupId is a UUID (has hyphens)
-  let resolvedGroupId = groupId;
-  if (!resolvedGroupId && txRef.startsWith("vyrdly_")) {
-    // Remove prefix "vyrdly_" and suffix "_<timestamp>" (last underscore segment)
-    const withoutPrefix = txRef.slice("vyrdly_".length);
-    const lastUnderscore = withoutPrefix.lastIndexOf("_");
-    resolvedGroupId = lastUnderscore > 0 ? withoutPrefix.slice(0, lastUnderscore) : withoutPrefix;
+  // Extract meta fields — handle flat object, nested object, and array structures
+  let extractedGroupId: string | undefined;
+  let extractedTargetPlan: BillingPlanInput = "free";
+  let extractedCycle: BillingCycleInput = "monthly";
+  let extractedInitiatedBy: string | null = null;
+
+  const rawMeta = data.meta ?? payload.meta;
+
+  if (Array.isArray(rawMeta)) {
+    for (const item of rawMeta as Record<string, unknown>[]) {
+      const k = (item.metaname || item.name || item.key) as string;
+      const v = (item.metavalue || item.value) as string;
+      if (k === "groupId" || k === "group_id") extractedGroupId = v;
+      if (k === "targetPlan" || k === "target_plan") extractedTargetPlan = v as BillingPlanInput;
+      if (k === "cycle") extractedCycle = v as BillingCycleInput;
+      if (k === "initiatedBy" || k === "initiated_by") extractedInitiatedBy = v;
+    }
+  } else if (rawMeta && typeof rawMeta === "object") {
+    const m = rawMeta as Record<string, unknown>;
+    if (Array.isArray(m.metaData)) {
+      for (const item of m.metaData as Record<string, unknown>[]) {
+        const k = (item.metaname || item.name || item.key) as string;
+        const v = (item.metavalue || item.value) as string;
+        if (k === "groupId" || k === "group_id") extractedGroupId = v;
+        if (k === "targetPlan" || k === "target_plan") extractedTargetPlan = v as BillingPlanInput;
+        if (k === "cycle") extractedCycle = v as BillingCycleInput;
+        if (k === "initiatedBy" || k === "initiated_by") extractedInitiatedBy = v;
+      }
+    }
+    extractedGroupId = extractedGroupId ?? ((m.groupId ?? m.group_id) as string | undefined);
+    extractedTargetPlan = (m.targetPlan ?? m.target_plan ?? extractedTargetPlan) as BillingPlanInput;
+    extractedCycle = (m.cycle ?? extractedCycle) as BillingCycleInput;
+    extractedInitiatedBy = (m.initiatedBy ?? m.initiated_by ?? extractedInitiatedBy) as string | null;
   }
 
-  if (!resolvedGroupId) throw new AppError("Could not resolve groupId from webhook", 400);
+  // groupId comes from meta — fall back to parsing tx_ref if meta is missing
+  // tx_ref format: vyrdly_<groupId>_<timestamp> where groupId is a UUID
+  let resolvedGroupId = extractedGroupId;
+  if ((!resolvedGroupId || !isUUID(resolvedGroupId)) && txRef.startsWith("vyrdly_")) {
+    const withoutPrefix = txRef.slice("vyrdly_".length);
+    const lastUnderscore = withoutPrefix.lastIndexOf("_");
+    const candidate = lastUnderscore > 0 ? withoutPrefix.slice(0, lastUnderscore) : withoutPrefix;
+    if (isUUID(candidate)) {
+      resolvedGroupId = candidate;
+    }
+  }
+
+  if (!resolvedGroupId || !isUUID(resolvedGroupId)) {
+    throw new AppError(`Could not resolve valid groupId from webhook (got: '${resolvedGroupId}')`, 400);
+  }
+
+  // Ensure target group exists in database
+  const [existingGroup] = await db
+    .select({ id: groups.id })
+    .from(groups)
+    .where(eq(groups.id, resolvedGroupId))
+    .limit(1);
+
+  if (!existingGroup) {
+    throw new AppError(`Group ${resolvedGroupId} not found in database`, 404);
+  }
+
+  // Sanitize initiatedBy to ensure valid UUID or null to avoid PostgreSQL DB error
+  const validInitiatedBy = isUUID(extractedInitiatedBy) ? extractedInitiatedBy : null;
 
   const [existingTx] = await db
     .select()
@@ -234,10 +298,12 @@ export const handleWebhook = async (
     return { success: true, message: "Already processed", txRef, groupId: resolvedGroupId };
   }
 
-  if (status === "successful" || status === "completed") {
-    const amount    = (data.amount as number) ?? 0;
+  const isSuccessful = ["successful", "completed", "succeeded"].includes(status);
+
+  if (isSuccessful) {
+    const amount = String(data.amount ?? payload.amount ?? 0);
     const startDate = new Date();
-    const endDate   = calcEndDate(cycle, startDate);
+    const endDate = calcEndDate(extractedCycle, startDate);
 
     const [newTx] = await db
       .insert(transactions)
@@ -246,12 +312,12 @@ export const handleWebhook = async (
         groupId: resolvedGroupId,
         status: "completed",
         amount,
-        currency: (data.currency as string) ?? "NGN",
-        planTier: targetPlan,
-        billingCycle: cycle,
+        currency: (data.currency as string) ?? (payload.currency as string) ?? "NGN",
+        planTier: extractedTargetPlan,
+        billingCycle: extractedCycle,
         paymentMethod: "flutterwave",
         completedAt: new Date(),
-        initiatedBy,
+        initiatedBy: validInitiatedBy,
       })
       .onConflictDoUpdate({
         target: transactions.txRef,
@@ -263,8 +329,8 @@ export const handleWebhook = async (
       .insert(subscriptions)
       .values({
         groupId: resolvedGroupId,
-        planTier: targetPlan,
-        billingCycle: cycle,
+        planTier: extractedTargetPlan,
+        billingCycle: extractedCycle,
         status: "active",
         startDate,
         endDate,
@@ -274,8 +340,8 @@ export const handleWebhook = async (
       .onConflictDoUpdate({
         target: subscriptions.groupId,
         set: {
-          planTier: targetPlan,
-          billingCycle: cycle,
+          planTier: extractedTargetPlan,
+          billingCycle: extractedCycle,
           status: "active",
           startDate,
           endDate,
@@ -287,13 +353,21 @@ export const handleWebhook = async (
 
     await db
       .update(groups)
-      .set({ planTier: targetPlan, updatedAt: new Date() })
+      .set({ planTier: extractedTargetPlan, updatedAt: new Date() })
       .where(eq(groups.id, resolvedGroupId));
 
-    return { success: true, message: "Payment processed and plan activated", txRef, groupId: resolvedGroupId };
+    return {
+      success: true,
+      message: "Payment processed and plan activated",
+      txRef,
+      groupId: resolvedGroupId,
+      plan: extractedTargetPlan,
+    };
   }
 
-  if (status === "failed" || status === "declined" || status === "cancelled") {
+  const isFailed = ["failed", "declined", "cancelled"].includes(status);
+
+  if (isFailed) {
     const newStatus = status === "cancelled" ? "cancelled" : "failed";
 
     await db
@@ -302,12 +376,12 @@ export const handleWebhook = async (
         txRef,
         groupId: resolvedGroupId,
         status: newStatus,
-        amount: (data.amount as number) ?? 0,
-        currency: (data.currency as string) ?? "NGN",
-        planTier: targetPlan,
-        billingCycle: cycle,
+        amount: String(data.amount ?? payload.amount ?? 0),
+        currency: (data.currency as string) ?? (payload.currency as string) ?? "NGN",
+        planTier: extractedTargetPlan,
+        billingCycle: extractedCycle,
         paymentMethod: "flutterwave",
-        initiatedBy,
+        initiatedBy: validInitiatedBy,
       })
       .onConflictDoUpdate({
         target: transactions.txRef,

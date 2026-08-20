@@ -34,13 +34,24 @@ export const flutterwaveWebhookController = async (
   next: NextFunction,
 ): Promise<void> => {
   try {
-    const signature = req.headers["verif-hash"] as string | undefined;
+    const signature = (
+      req.headers["verif-hash"] ||
+      req.headers["verif_hash"] ||
+      req.headers["x-flutterwave-signature"]
+    ) as string | undefined;
+
     const result = await billingService.handleWebhook(
       req.body as Record<string, unknown>,
       signature,
     );
     res.status(200).json(result);
   } catch (err) {
+    const e = err as Error & { statusCode?: number };
+    console.error("[Flutterwave-Webhook-Error]", e.message, "Payload:", JSON.stringify(req.body, null, 2));
+    if (e.statusCode === 401) {
+      res.status(401).json({ error: e.message });
+      return;
+    }
     next(err);
   }
 };
