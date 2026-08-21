@@ -6,13 +6,20 @@ import {
   getPlansController,
   initializeCheckoutController,
   getGroupBillingController,
+  verifyPaymentController,
 } from "./billing.controller";
 import { initializeCheckoutSchema } from "./billing.schema";
 
 const router = Router();
 
+// ── Public ────────────────────────────────────────────────────────────────────
 router.get("/plans", getPlansController);
 
+// ── Flutterwave webhook (no auth, bypass rate limit) ─────────────────────────
+const skipRateLimit: RequestHandler = (_req, _res, next) => next();
+router.post("/webhooks/flutterwave", skipRateLimit, flutterwaveWebhookController);
+
+// ── Authenticated ─────────────────────────────────────────────────────────────
 router.post(
   "/checkout/initialize",
   authenticate,
@@ -20,15 +27,11 @@ router.post(
   initializeCheckoutController,
 );
 
-// Flutterwave webhook — no auth, no rate limit, must receive raw JSON
-// express-rate-limit is applied globally in app.ts but we skip it here
-// by mounting this route before the rate-limiter would normally fire.
-// The route is registered on the billing router which is mounted at /api/billing,
-// making the full path: POST /api/billing/webhooks/flutterwave
-const skipRateLimit: RequestHandler = (_req, _res, next) => next()
-router.post("/webhooks/flutterwave", skipRateLimit, flutterwaveWebhookController);
+// Verify payment by tx_ref after Flutterwave redirect — idempotent fallback
+// Body: { txRef: string }
+router.post("/verify", authenticate, verifyPaymentController);
 
-// Get billing details for a specific group (admin only)
+// Group billing status (admin only)
 router.get("/groups/:groupId", authenticate, getGroupBillingController);
 
 export default router;
