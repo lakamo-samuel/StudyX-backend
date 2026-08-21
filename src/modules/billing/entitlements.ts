@@ -25,7 +25,7 @@ export const PLAN_LIMITS: Record<
     monthlyToolkitSummaries: 100,
   },
   commercial: {
-    maxMembersPerGroup: null,
+    maxMembersPerGroup: 50,
     maxQuizQuestionsPerSession: 100,
     monthlyToolkitSummaries: 500,
   },

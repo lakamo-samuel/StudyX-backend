@@ -313,7 +313,7 @@ export default function emailTemplate({ firstName, code }: Props) {
             </div>
         <p>© ${date} Vyrdly. All rights reserved.</p>
             <p style="margin-top: 8px; font-size: 11px; color: #94A3B8;">
-                You received this email because you signed up for Atrixia. 
+                You received this email because you signed up for Vrydly. 
                 <a href="{{APP_URL}}/unsubscribe" style="color: #14B8A6; text-decoration: none;">Unsubscribe</a>
             </p>
         </div>

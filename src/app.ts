@@ -21,7 +21,6 @@ import billingRoutes from './modules/billing/billing.routes'
 const app = express()
 
 // Trust the first proxy hop — required on Render, Railway, Heroku, nginx, etc.
-// Without this, express-rate-limit throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR
 app.set('trust proxy', 1)
 
 // Security
