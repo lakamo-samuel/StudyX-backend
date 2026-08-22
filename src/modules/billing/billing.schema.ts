@@ -5,8 +5,9 @@ export const billingCycleSchema = z.enum(["weekly", "monthly", "yearly"]);
 
 export const initializeCheckoutSchema = z.object({
   groupId: z.string().uuid("Invalid group ID"),
-  plan: billingPlanSchema,
-  cycle: billingCycleSchema,
+  plan:    billingPlanSchema,
+  cycle:   billingCycleSchema,
+  // recurring is always true — kept for forward compatibility but ignored
 });
 
 export const webhookSchema = z.object({

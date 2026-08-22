@@ -3,6 +3,7 @@ import {
   uuid,
   varchar,
   numeric,
+  boolean,
   timestamp,
   pgEnum,
 } from "drizzle-orm/pg-core";
@@ -53,6 +54,10 @@ export const subscriptions = pgTable("subscriptions", {
   lastTransactionId: uuid("last_transaction_id").references(() => transactions.id, {
     onDelete: "set null",
   }),
+  // Recurring billing fields — null means one-time payment
+  flwPlanId: varchar("flw_plan_id", { length: 50 }),           // Flutterwave plan ID
+  flwSubscriptionId: varchar("flw_subscription_id", { length: 100 }), // FLW subscription token
+  isRecurring: boolean("is_recurring").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

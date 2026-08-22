@@ -10,6 +10,23 @@ import { AppError } from "../../middleware/error.middleware";
 import type { BillingCycleInput, BillingPlanInput, InitializeCheckoutInput } from "./billing.schema";
 import { PLAN_LIMITS } from "./entitlements";
 
+// ── Flutterwave recurring payment plan IDs ───────────────────────────────────
+// Created in Flutterwave dashboard → Payment Plans
+// These attach users to auto-recurring charges on each billing interval.
+
+const FLW_PLAN_IDS: Record<Exclude<BillingPlanInput, "free">, Record<BillingCycleInput, number>> = {
+  pro: {
+    weekly:  242277,
+    monthly: 242278,
+    yearly:  242279,
+  },
+  commercial: {
+    weekly:  242280,
+    monthly: 242281,
+    yearly:  242282,
+  },
+};
+
 // ── Pricing (single source of truth for amounts) ─────────────────────────────
 // Yearly prices apply a discount: Pro=30% off monthly×12, Commercial=20% off monthly×12
 
@@ -155,16 +172,16 @@ export const initializeCheckout = async (
   const { data } = await axios.post(
     "https://api.flutterwave.com/v3/payments",
     {
-      tx_ref: txRef,
+      tx_ref:       txRef,
       amount,
-      currency: "NGN",
+      currency:     "NGN",
       redirect_url: `${env.CLIENT_URL}/settings?billing=success&tx_ref=${txRef}`,
       customer: {
         email: customerEmail,
         name:  customerName,
       },
       customizations: {
-        title: "Vyrdly Subscription",
+        title:       "Vyrdly Subscription",
         description: `${input.plan} (${input.cycle}) plan for ${group.name}`,
       },
       meta: {
@@ -173,6 +190,10 @@ export const initializeCheckout = async (
         cycle:       input.cycle,
         initiatedBy: userId,
       },
+      // Always use Flutterwave payment plan for auto-recurring billing
+      ...(input.plan !== "free"
+        ? { payment_plan: FLW_PLAN_IDS[input.plan as Exclude<BillingPlanInput, "free">][input.cycle] }
+        : {}),
     },
     {
       headers: {
@@ -327,6 +348,18 @@ export const handleWebhook = async (
     }
   }
 
+  // Extract recurring billing fields from payload
+  // Flutterwave sends plan ID and subscription token on recurring charge events
+  const extractedFlwPlanId = (
+    (data.plan_id ?? data.planId ?? payload.plan_id ?? payload.planId) as string | undefined
+  ) ?? null;
+  const extractedFlwSubscriptionId = (
+    (data.subscription_id ?? data.subscriptionId ?? payload.subscription_id) as string | undefined
+  ) ?? null;
+  const extractedIsRecurring = !!(extractedFlwPlanId || extractedFlwSubscriptionId ||
+    (rawMeta as Record<string, unknown>)?.recurring === true ||
+    (rawMeta as Record<string, unknown>)?.recurring === "true");
+
   if (!resolvedGroupId || !isUUID(resolvedGroupId)) {
     throw new AppError(`Could not resolve valid groupId from webhook (got: '${resolvedGroupId}')`, 400);
   }
@@ -386,26 +419,32 @@ export const handleWebhook = async (
     await db
       .insert(subscriptions)
       .values({
-        groupId: resolvedGroupId,
-        planTier: extractedTargetPlan,
-        billingCycle: extractedCycle,
-        status: "active",
+        groupId:           resolvedGroupId,
+        planTier:          extractedTargetPlan,
+        billingCycle:      extractedCycle,
+        status:            "active",
         startDate,
         endDate,
-        nextRenewalDate: endDate,
+        nextRenewalDate:   endDate,
         lastTransactionId: newTx.id,
+        isRecurring:       extractedIsRecurring,
+        flwPlanId:         extractedFlwPlanId ?? null,
+        flwSubscriptionId: extractedFlwSubscriptionId ?? null,
       })
       .onConflictDoUpdate({
         target: subscriptions.groupId,
         set: {
-          planTier: extractedTargetPlan,
-          billingCycle: extractedCycle,
-          status: "active",
+          planTier:          extractedTargetPlan,
+          billingCycle:      extractedCycle,
+          status:            "active",
           startDate,
           endDate,
-          nextRenewalDate: endDate,
+          nextRenewalDate:   endDate,
           lastTransactionId: newTx.id,
-          updatedAt: new Date(),
+          isRecurring:       extractedIsRecurring,
+          flwPlanId:         extractedFlwPlanId ?? null,
+          flwSubscriptionId: extractedFlwSubscriptionId ?? null,
+          updatedAt:         new Date(),
         },
       });
 
