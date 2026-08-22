@@ -819,3 +819,50 @@ export const verifyPaymentByTxRef = async (
     planTier,
   };
 };
+
+// ── Cancel subscription ───────────────────────────────────────────────────────
+// Cancels the Flutterwave recurring plan and marks the subscription as cancelled.
+// The group retains access until the current period ends (endDate).
+
+export const cancelSubscription = async (groupId: string, userId: string) => {
+  await assertGroupAdmin(groupId, userId);
+
+  const [sub] = await db
+    .select()
+    .from(subscriptions)
+    .where(eq(subscriptions.groupId, groupId))
+    .limit(1);
+
+  if (!sub) {
+    throw new AppError("No active subscription found for this group", 404);
+  }
+
+  if (sub.status === "cancelled") {
+    throw new AppError("Subscription is already cancelled", 400);
+  }
+
+  // Cancel on Flutterwave side if we have the subscription token
+  if (sub.flwSubscriptionId && env.FLUTTERWAVE_SECRET_KEY) {
+    try {
+      await axios.put(
+        `https://api.flutterwave.com/v3/subscriptions/${sub.flwSubscriptionId}/cancel`,
+        {},
+        { headers: { Authorization: `Bearer ${env.FLUTTERWAVE_SECRET_KEY}` } },
+      );
+    } catch (err) {
+      // Log but don't block — still cancel locally
+      console.error("[cancel-subscription] Flutterwave cancel failed:", (err as Error).message);
+    }
+  }
+
+  // Mark as cancelled in our DB — group keeps access until endDate
+  await db
+    .update(subscriptions)
+    .set({ status: "cancelled", updatedAt: new Date() })
+    .where(eq(subscriptions.groupId, groupId));
+
+  return {
+    message: "Subscription cancelled. You will retain access until the end of your current billing period.",
+    endDate: sub.endDate,
+  };
+};

@@ -7,6 +7,7 @@ import {
   initializeCheckoutController,
   getGroupBillingController,
   verifyPaymentController,
+  cancelSubscriptionController,
 } from "./billing.controller";
 import { initializeCheckoutSchema } from "./billing.schema";
 
@@ -27,11 +28,13 @@ router.post(
   initializeCheckoutController,
 );
 
-// Verify payment by tx_ref after Flutterwave redirect — idempotent fallback
-// Body: { txRef: string }
+// Verify payment by txRef after Flutterwave redirect — idempotent fallback
 router.post("/verify", authenticate, verifyPaymentController);
 
 // Group billing status (admin only)
 router.get("/groups/:groupId", authenticate, getGroupBillingController);
+
+// Cancel recurring subscription (admin only)
+router.delete("/groups/:groupId/subscription", authenticate, cancelSubscriptionController);
 
 export default router;

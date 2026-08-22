@@ -15,6 +15,13 @@
       "when": 1787235762461,
       "tag": "0001_majestic_sauron",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787400000000,
+      "tag": "0002_recurring_billing",
+      "breakpoints": true
     }
   ]
 }

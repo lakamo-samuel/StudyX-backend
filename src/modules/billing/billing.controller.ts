@@ -94,3 +94,21 @@ export const verifyPaymentController = async (
     next(err);
   }
 };
+
+// DELETE /api/billing/groups/:groupId/subscription
+// Cancels the recurring subscription for a group (admin only).
+export const cancelSubscriptionController = async (
+  req: Request<{ groupId: string }>,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const result = await billingService.cancelSubscription(
+      req.params.groupId,
+      req.user!.userId,
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};
