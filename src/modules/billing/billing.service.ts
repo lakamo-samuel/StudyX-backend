@@ -191,9 +191,8 @@ export const initializeCheckout = async (
         initiatedBy: userId,
       },
       // Always use Flutterwave payment plan for auto-recurring billing
-      ...(input.plan !== "free"
-        ? { payment_plan: FLW_PLAN_IDS[input.plan as Exclude<BillingPlanInput, "free">][input.cycle] }
-        : {}),
+      // input.plan is guaranteed non-"free" here (free was handled and returned above)
+      payment_plan: FLW_PLAN_IDS[input.plan as Exclude<BillingPlanInput, "free">][input.cycle],
     },
     {
       headers: {
