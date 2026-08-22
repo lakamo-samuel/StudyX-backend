@@ -518,115 +518,6 @@ export const getGroupBilling = async (groupId: string, userId: string) => {
   };
 };
 
-
-// ── Verify payment by transaction ID (called from redirect URL) ───────────────
-// Flutterwave appends ?transaction_id=xxx&tx_ref=yyy&status=successful to the redirect.
-// We verify directly with their API so the plan activates even if the webhook was delayed/lost.
-
-export const verifyPaymentByTransactionId = async (
-  transactionId: string,
-  txRef: string,
-  userId: string,
-) => {
-  // Idempotency: already processed by webhook
-  const [existing] = await db
-    .select()
-    .from(transactions)
-    .where(eq(transactions.txRef, txRef))
-    .limit(1);
-
-  if (existing?.status === "completed") {
-    return { alreadyProcessed: true, message: "Plan already activated" };
-  }
-
-  if (!env.FLUTTERWAVE_SECRET_KEY) {
-    return { alreadyProcessed: false, message: "No Flutterwave key configured (test mode)" };
-  }
-
-  const { data: resp } = await axios.get(
-    `https://api.flutterwave.com/v3/transactions/${transactionId}/verify`,
-    { headers: { Authorization: `Bearer ${env.FLUTTERWAVE_SECRET_KEY}` } },
-  );
-
-  const txData = resp?.data as Record<string, unknown> | undefined;
-  if (!txData || (txData.status as string) !== "successful") {
-    throw new AppError("Payment verification failed or not successful", 400);
-  }
-
-  const meta   = (txData.meta ?? {}) as Record<string, unknown>;
-  const groupId = (meta.groupId ?? meta.group_id) as string | undefined;
-
-  // Fall back to parsing tx_ref
-  let resolvedGroupId = groupId;
-  if (!resolvedGroupId && txRef.startsWith("vyrdly_")) {
-    const withoutPrefix  = txRef.slice("vyrdly_".length);
-    const lastUnderscore = withoutPrefix.lastIndexOf("_");
-    resolvedGroupId = lastUnderscore > 0 ? withoutPrefix.slice(0, lastUnderscore) : withoutPrefix;
-  }
-
-  if (!resolvedGroupId) throw new AppError("Could not resolve groupId from payment", 400);
-
-  const planTier    = ((meta.targetPlan ?? meta.target_plan ?? "free") as BillingPlanInput);
-  const billingCycle = ((meta.cycle ?? "monthly") as BillingCycleInput);
-  const amount      = String(txData.amount ?? 0);
-  const currency    = (txData.currency as string) ?? "NGN";
-  const startDate   = new Date();
-  const endDate     = calcEndDate(billingCycle, startDate);
-
-  const [newTx] = await db
-    .insert(transactions)
-    .values({
-      txRef,
-      groupId: resolvedGroupId,
-      status: "completed",
-      amount,
-      currency,
-      planTier,
-      billingCycle,
-      paymentMethod: "flutterwave",
-      completedAt: new Date(),
-      initiatedBy: isUUID(userId) ? userId : null,
-    })
-    .onConflictDoUpdate({
-      target: transactions.txRef,
-      set: { status: "completed", completedAt: new Date() },
-    })
-    .returning();
-
-  await db
-    .insert(subscriptions)
-    .values({
-      groupId: resolvedGroupId,
-      planTier,
-      billingCycle,
-      status: "active",
-      startDate,
-      endDate,
-      nextRenewalDate: endDate,
-      lastTransactionId: newTx.id,
-    })
-    .onConflictDoUpdate({
-      target: subscriptions.groupId,
-      set: {
-        planTier,
-        billingCycle,
-        status: "active",
-        startDate,
-        endDate,
-        nextRenewalDate: endDate,
-        lastTransactionId: newTx.id,
-        updatedAt: new Date(),
-      },
-    });
-
-  await db
-    .update(groups)
-    .set({ planTier, updatedAt: new Date() })
-    .where(eq(groups.id, resolvedGroupId));
-
-  return { alreadyProcessed: false, message: "Plan activated via verification", groupId: resolvedGroupId, planTier };
-};
-
 // ── Type-safe Flutterwave verify response ─────────────────────────────────────
 
 interface FlutterwaveVerifyData {
@@ -647,17 +538,12 @@ interface FlutterwaveVerifyData {
 }
 
 interface FlutterwaveVerifyResponse {
-  status:  string;   // "success" | "error"
+  status:  string;
   message: string;
   data:    FlutterwaveVerifyData | null;
 }
 
 // ── verifyPaymentByTxRef ──────────────────────────────────────────────────────
-// Called after Flutterwave redirects back to the app with a tx_ref param.
-// 1. Check if already processed (idempotent)
-// 2. Look up the transaction ID from Flutterwave's transaction list by tx_ref
-// 3. Verify the transaction directly with Flutterwave
-// 4. Activate the plan if payment is successful
 
 export const verifyPaymentByTxRef = async (
   txRef: string,

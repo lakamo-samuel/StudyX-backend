@@ -39,7 +39,29 @@ export const getUserGroups = async (userId: string) => {
     .innerJoin(groups, eq(groupMembers.groupId, groups.id))
     .where(and(eq(groupMembers.userId, userId), eq(groupMembers.status, "approved")));
 
-  return members.map((m) => ({ ...m.group, role: m.role }));
+  // Fetch member counts for all groups in one query
+  const groupIds = members.map(m => m.group.id);
+  const counts = groupIds.length > 0
+    ? await db
+        .select({ groupId: groupMembers.groupId, id: groupMembers.id })
+        .from(groupMembers)
+        .where(and(
+          eq(groupMembers.status, "approved"),
+        ))
+    : [];
+
+  const countMap = counts.reduce<Record<string, number>>((acc, row) => {
+    if (groupIds.includes(row.groupId)) {
+      acc[row.groupId] = (acc[row.groupId] ?? 0) + 1;
+    }
+    return acc;
+  }, {});
+
+  return members.map((m) => ({
+    ...m.group,
+    role: m.role,
+    memberCount: countMap[m.group.id] ?? 1,
+  }));
 };
 
 // ── GET SINGLE GROUP ──
